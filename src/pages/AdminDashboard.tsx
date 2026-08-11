@@ -283,11 +283,14 @@ export function AdminDashboard() {
     }
 
     setDeletingId(row.id);
-    const { error } = await supabase.from("members").delete().eq("id", row.id);
+    const { data, error } = await supabase.functions.invoke("delete-member", {
+      body: { member_id: row.id },
+    });
     setDeletingId(null);
 
-    if (error) {
-      window.alert("Não deu pra apagar. Tenta de novo.");
+    if (error || data?.error) {
+      const reason = await extractFunctionErrorMessage(error, data);
+      window.alert(`Não deu pra apagar${reason ? `: ${reason}` : ". Tenta de novo."}`);
       return;
     }
 

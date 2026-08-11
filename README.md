@@ -118,9 +118,13 @@ adicionar, mas fica fora do escopo deste MVP.
 - **Editar membro**: ícone de lápis ao lado do nome, na tabela de Membros —
   edita nome e cupom direto na linha (sem SQL). Só admin consegue (RLS
   testado).
-- **Excluir membro**: botão "Excluir" na tabela de Membros apaga a linha de
-  vez, em cascata com todas as vendas/comissão dele — **irreversível**. Por
-  segurança, pede pra digitar o cupom exato do membro antes de confirmar.
+- **Excluir membro**: botão "Excluir" na tabela de Membros chama a function
+  `delete-member`, que apaga a conta de login (Supabase Auth) e só depois a
+  linha em `members`, em cascata com todas as vendas/comissão dele —
+  **irreversível**. Por segurança, pede pra digitar o cupom exato do membro
+  antes de confirmar. Apagar o login junto é importante: antes disso, apagar
+  só a linha de `members` deixava a conta de Auth órfã, e recriar o membro
+  com o mesmo cupom/e-mail depois falhava com "already registered".
 - **Desativar sem apagar** (`active = false`) não tem mais botão na UI, mas
   o mecanismo continua existindo — quem preferir manter o histórico e só
   tirar o membro da lista principal pode fazer via SQL/Table Editor:
@@ -245,6 +249,7 @@ membro. Se `is_admin = true`, aparece o botão "Painel Admin" no cabeçalho.
 npx supabase login
 npx supabase functions deploy reset-member-password --project-ref tflxotunokypiakkdyxs
 npx supabase functions deploy create-member-login --project-ref tflxotunokypiakkdyxs
+npx supabase functions deploy delete-member --project-ref tflxotunokypiakkdyxs
 ```
 
 A segunda (`create-member-login`) é chamada automaticamente pela caixa
