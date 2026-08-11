@@ -13,6 +13,7 @@ dist-ssr
 *.local
 .env
 member-credentials.csv
+supabase/.temp
 
 # Editor directories and files
 .vscode/*
