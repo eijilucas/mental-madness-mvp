@@ -1,10 +1,12 @@
 // ============================================================================
 // Edge Function: shopify-webhook
-// Recebe 3 eventos da Shopify, todos na mesma URL (diferenciados pelo header
+// Recebe eventos da Shopify, todos na mesma URL (diferenciados pelo header
 // x-shopify-topic):
-//   - orders/paid       -> insere a venda em `sales` (+ `sale_items`)
-//   - orders/cancelled  -> apaga a venda (pedido cancelado)
-//   - refunds/create    -> apaga a venda (pedido estornado, total ou parcial)
+//   - orders/paid          -> insere a venda em `sales` (+ `sale_items`)
+//   - orders/cancelled     -> apaga a venda (pedido cancelado)
+//   - refunds/create       -> apaga a venda (pedido estornado, total ou parcial)
+//   - discounts/create     -> cadastra o membro automaticamente (cupom novo)
+//   - discount_codes/create -> idem, formato legado da API de price rules
 // O trigger do banco recalcula o ciclo do mês automaticamente em qualquer
 // insert/delete de `sales`.
 //
@@ -16,13 +18,16 @@
 //          precisa ser setada manualmente)
 //   2. Deploy: npx supabase functions deploy shopify-webhook
 //   3. No admin da Shopify: Settings -> Notifications -> Webhooks -> Create
-//      webhook, uma vez pra cada evento (mesma URL nos 3):
+//      webhook, uma vez pra cada evento (mesma URL em todos):
 //        -> Event: "Order payment" (orders/paid)
 //        -> Event: "Order cancellation" (orders/cancelled)
 //        -> Event: "Refund create" (refunds/create)
+//        -> Event: "Discount creation" (discounts/create) — se não aparecer
+//           essa opção na sua loja, procure "Discount code creation"
+//           (discount_codes/create), que a function também entende.
 //        -> Format: JSON
 //        -> URL: https://<seu-projeto>.supabase.co/functions/v1/shopify-webhook
-//   4. Copie o "Signing secret" (é o mesmo pros 3 webhooks) para
+//   4. Copie o "Signing secret" (é o mesmo pra todos os webhooks) para
 //      SHOPIFY_WEBHOOK_SECRET.
 //
 // Até lá, esta função roda em modo "pronta pra plugar": ela funciona
@@ -36,8 +41,13 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const SHOPIFY_WEBHOOK_SECRET = Deno.env.get("SHOPIFY_WEBHOOK_SECRET") ?? "";
 
-// service role: esta função precisa escrever em `sales`, que não tem policy
-// de insert/delete para usuários comuns (por design — só o backend pode gravar vendas).
+// Precisa ficar igual a SYNTHETIC_LOGIN_DOMAIN em src/lib/auth.ts — é o
+// domínio fake usado pra logar sem precisar de e-mail de verdade.
+const SYNTHETIC_LOGIN_DOMAIN = "m3ntalmadness.com";
+
+// service role: esta função precisa escrever em `sales`/`members` e criar
+// login no Auth, nada disso tem policy de escrita para usuários comuns (por
+// design — só o backend pode gravar isso).
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
 interface ShopifyDiscountCode {
@@ -63,6 +73,34 @@ interface ShopifyOrderPayload {
 // vem em order_id, não em id (id ali é o id do reembolso).
 interface ShopifyRefundPayload {
   order_id: number | string;
+}
+
+function randomTempPassword(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(6));
+  return "mm-" + btoa(String.fromCharCode(...bytes)).replace(/[^a-zA-Z0-9]/g, "").slice(0, 8);
+}
+
+// A Shopify manda formatos diferentes dependendo de qual API cria o
+// desconto — tenta os caminhos mais comuns, do mais novo pro mais legado.
+function extractDiscountCode(payload: Record<string, unknown>): string | null {
+  const discount = payload.discount as Record<string, unknown> | undefined;
+  const fromUnifiedCode = discount?.code as string | undefined;
+  if (fromUnifiedCode) return fromUnifiedCode;
+
+  // API unificada de desconto: pra desconto de código, o "title" É o código.
+  const fromUnifiedTitle = discount?.title as string | undefined;
+  if (fromUnifiedTitle) return fromUnifiedTitle;
+
+  // discount_codes/create (legado, via price rule): { discount_code: { code } }
+  const discountCode = payload.discount_code as Record<string, unknown> | undefined;
+  const fromLegacy = discountCode?.code as string | undefined;
+  if (fromLegacy) return fromLegacy;
+
+  // fallback: campo direto no topo do payload
+  const fromTopLevel = (payload.code as string | undefined) ?? (payload.title as string | undefined);
+  if (fromTopLevel) return fromTopLevel;
+
+  return null;
 }
 
 async function verifyShopifyHmac(rawBody: string, hmacHeader: string | null): Promise<boolean> {
@@ -186,6 +224,78 @@ async function handleOrderReversal(orderId: string | number): Promise<Response> 
   return jsonResponse({ ok: true, reverted_order_id: String(orderId) });
 }
 
+// Cupom novo criado na Shopify -> cadastra o membro automaticamente. O nome
+// sai igual ao código do cupom (a Shopify não sabe o nome de verdade do
+// afiliado) — o admin corrige depois pelo ícone de lápis na tabela. Já cria
+// o login junto (senha temporária): o admin pega uma senha nova a qualquer
+// momento clicando em "Resetar senha" na tabela, não precisa guardar a
+// gerada aqui.
+async function handleDiscountCreated(payload: Record<string, unknown>): Promise<Response> {
+  const rawCode = extractDiscountCode(payload);
+  if (!rawCode) {
+    return jsonResponse({ skipped: true, reason: "Payload sem código de cupom identificável" });
+  }
+
+  const couponCode = rawCode.trim().toUpperCase();
+  if (!couponCode) {
+    return jsonResponse({ skipped: true, reason: "Código de cupom vazio" });
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from("members")
+    .select("id")
+    .ilike("coupon_code", couponCode)
+    .maybeSingle();
+
+  if (existingError) {
+    console.error("Erro ao checar membro existente:", existingError);
+    return jsonResponse({ error: "Erro interno ao checar membro existente" }, 500);
+  }
+
+  if (existing) {
+    // Cupom já tem membro cadastrado (ex: foi adicionado manualmente antes) — não duplica.
+    return jsonResponse({ skipped: true, reason: `Já existe membro pro cupom '${couponCode}'` });
+  }
+
+  const email = `${couponCode.toLowerCase()}@${SYNTHETIC_LOGIN_DOMAIN}`;
+
+  const { data: member, error: insertError } = await supabase
+    .from("members")
+    .insert({ name: couponCode, coupon_code: couponCode, email })
+    .select("id")
+    .single();
+
+  if (insertError) {
+    if (insertError.code === "23505") {
+      return jsonResponse({ skipped: true, reason: "Cupom já registrado (conflito de corrida)" });
+    }
+    console.error("Erro ao criar membro:", insertError);
+    return jsonResponse({ error: "Erro interno ao criar membro" }, 500);
+  }
+
+  const tempPassword = randomTempPassword();
+  const { data: created, error: createAuthError } = await supabase.auth.admin.createUser({
+    email,
+    password: tempPassword,
+    email_confirm: true,
+    user_metadata: { must_change_password: true },
+  });
+
+  if (createAuthError || !created.user) {
+    // Membro já existe na tabela, só o login que falhou — o admin resolve
+    // isso clicando em "Criar login" na tabela (mesmo caminho manual).
+    console.error("Membro criado, mas falhou ao criar login:", createAuthError);
+    return jsonResponse({ ok: true, member_id: member.id, coupon_code: couponCode, login_created: false });
+  }
+
+  const { error: linkError } = await supabase.from("members").update({ auth_user_id: created.user.id }).eq("id", member.id);
+  if (linkError) {
+    console.error("Login criado, mas falhou ao vincular ao membro:", linkError);
+  }
+
+  return jsonResponse({ ok: true, member_id: member.id, coupon_code: couponCode, login_created: !linkError });
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -215,6 +325,10 @@ Deno.serve(async (req: Request) => {
   if (topic === "refunds/create") {
     const refund = payload as unknown as ShopifyRefundPayload;
     return await handleOrderReversal(refund.order_id);
+  }
+
+  if (topic === "discounts/create" || topic === "discount_codes/create") {
+    return await handleDiscountCreated(payload);
   }
 
   return await handleOrderPaid(payload as unknown as ShopifyOrderPayload);

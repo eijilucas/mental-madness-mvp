@@ -277,18 +277,21 @@ sem nenhuma credencial real configurada. Quando for ativar:
    (`SUPABASE_SERVICE_ROLE_KEY` e `SUPABASE_URL` já ficam disponíveis
    automaticamente dentro da Edge Function em produção.)
 3. No admin da Shopify: **Settings → Notifications → Webhooks → Create
-   webhook** — repita 3 vezes, uma por evento, todos apontando pra **mesma
-   URL** (a function decide o que fazer olhando o header
-   `X-Shopify-Topic`):
+   webhook** — repita uma vez por evento, todos apontando pra **mesma URL**
+   (a function decide o que fazer olhando o header `X-Shopify-Topic`):
    - Event: `Order payment` (`orders/paid`) → registra a venda
    - Event: `Order cancellation` (`orders/cancelled`) → reverte a venda
    - Event: `Refund create` (`refunds/create`) → reverte a venda (reembolso
      total ou parcial — MVP não rastreia reembolso item a item, remove a
      venda inteira)
+   - Event: `Discount creation` (`discounts/create`) → cadastra o membro
+     automaticamente quando um cupom novo é criado (se essa opção não
+     aparecer na sua loja, procure `Discount code creation`
+     (`discount_codes/create`), formato legado que a function também entende)
    - Format: `JSON`
    - URL: `https://tflxotunokypiakkdyxs.supabase.co/functions/v1/shopify-webhook`
-4. Copie o "Signing secret" gerado pela Shopify (é o mesmo pros 3 webhooks)
-   para o secret `SHOPIFY_WEBHOOK_SECRET` do passo 2.
+4. Copie o "Signing secret" gerado pela Shopify (é o mesmo pra todos os
+   webhooks) para o secret `SHOPIFY_WEBHOOK_SECRET` do passo 2.
 
 A function identifica o cupom em `discount_codes[0].code` (ou
 `discount_applications` como fallback), busca o membro dono do cupom
@@ -302,6 +305,18 @@ Cancelamento e reembolso apagam a venda em `sales` (o `on delete cascade`
 leva `sale_items` junto) usando `shopify_order_id` pra achar o pedido — o
 trigger recalcula o ciclo do membro na hora, sem precisar de ação manual no
 admin.
+
+**Cupom novo → membro automático.** Quando o Vitor cria um cupom na
+Shopify, a function extrai o código (tenta os campos mais comuns dos dois
+formatos de API de desconto que a Shopify usa — não dá pra saber qual
+formato exato a loja vai mandar sem testar com um cupom real) e cadastra o
+membro com **nome = código do cupom** (a Shopify não manda o nome de
+verdade do afiliado — o admin corrige depois pelo ícone de lápis na tabela)
+e já cria o login junto, com senha temporária. Como a senha gerada aqui não
+aparece em lugar nenhum do painel, o admin pega uma senha nova a qualquer
+momento clicando em **"Resetar senha"** na tabela de Membros pra passar pro
+afiliado. Se o cupom já tiver membro cadastrado (ex: foi adicionado
+manualmente antes), o webhook não duplica — só ignora.
 
 ## Identidade visual
 
