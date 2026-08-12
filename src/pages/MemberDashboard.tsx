@@ -103,6 +103,7 @@ export function MemberDashboard() {
   const piecesEarned = cycle?.pieces_earned ?? 0;
   const commission = cycle?.commission_amount ?? 0;
   const isCurrentMonth = selectedMonth === currentCycleMonth();
+  const dropCompleted = appConfig.drop_piece_count > 0 && piecesEarned >= appConfig.drop_piece_count;
 
   return (
     <div className="mm-app-frame">
@@ -110,6 +111,7 @@ export function MemberDashboard() {
         memberName={member.name}
         couponCode={member.coupon_code}
         onSignOut={signOut}
+        celebrate={isCurrentMonth && dropCompleted}
         rightSlot={
           member.is_admin ? (
             <Link to="/admin" className="mm-link-btn">
@@ -145,10 +147,7 @@ export function MemberDashboard() {
         commissionRate={appConfig.commission_rate}
       />
 
-      <LifetimeProgress
-        totalSales={totalSales}
-        dropCompleted={appConfig.drop_piece_count > 0 && piecesEarned >= appConfig.drop_piece_count}
-      />
+      <LifetimeProgress totalSales={totalSales} dropCompleted={dropCompleted} />
     </div>
   );
 }

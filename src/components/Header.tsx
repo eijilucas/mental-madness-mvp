@@ -5,15 +5,20 @@ interface HeaderProps {
   couponCode?: string;
   onSignOut: () => void;
   rightSlot?: React.ReactNode;
+  // Efeito na logo quando o membro já garantiu todas as peças do drop no
+  // ciclo atual — brilho + reflexo passando por cima do símbolo.
+  celebrate?: boolean;
 }
 
-export function Header({ memberName, couponCode, onSignOut, rightSlot }: HeaderProps) {
+export function Header({ memberName, couponCode, onSignOut, rightSlot, celebrate }: HeaderProps) {
   const { theme, toggleTheme } = useTheme();
 
   return (
     <header className="mm-header">
       <div className="mm-header-brand">
-        <img src="/logo-m.png" alt="Mental Madness" className="mm-logo-mark" />
+        <div className={`mm-logo-mark-wrap${celebrate ? " mm-logo-celebrate" : ""}`}>
+          <img src="/logo-m.png" alt="Mental Madness" className="mm-logo-mark" />
+        </div>
         <span className="mm-wordmark">MENTAL MADNESS</span>
       </div>
 
