@@ -145,7 +145,10 @@ export function MemberDashboard() {
         commissionRate={appConfig.commission_rate}
       />
 
-      <LifetimeProgress totalSales={totalSales} />
+      <LifetimeProgress
+        totalSales={totalSales}
+        dropCompleted={appConfig.drop_piece_count > 0 && piecesEarned >= appConfig.drop_piece_count}
+      />
     </div>
   );
 }
