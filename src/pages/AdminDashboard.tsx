@@ -651,7 +651,7 @@ export function AdminDashboard() {
         )}
 
         <div className="mm-admin-summary-grid" style={{ marginBottom: 20 }}>
-          <StatCard label="Total Pendente" value={currencyFormatter.format(totalPendingPayout)} accent />
+          <StatCard label="Comissão Total a Enviar" value={currencyFormatter.format(totalPendingPayout)} accent />
         </div>
 
         {pendingPayouts.length === 0 ? (
