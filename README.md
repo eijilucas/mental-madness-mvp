@@ -132,6 +132,29 @@ adicionar, mas fica fora do escopo deste MVP.
   assim ficam visíveis numa tabela separada, "Membros Removidos", com botão
   pra **Reativar** ou **Excluir** definitivamente.
 
+## Pagamento de comissão via PIX (dia 5, crédito compartilhado)
+
+Seção "Pagamento de Comissão (PIX)" no painel admin, logo abaixo do resumo
+do mês. O Vitor carrega um crédito único (`commission_credit`, um "bolo" só
+pra empresa inteira, não por afiliado) e, todo dia 5, o admin confere a
+lista de comissões pendentes (ciclos **já fechados**, ou seja
+`cycle_month` anterior ao mês atual, com `commission_amount > 0` e
+`commission_paid = false`) e marca cada uma como paga.
+
+**Ainda sem integração real com o Mercado Pago** — "Marcar como pago" só
+registra `cycles.commission_paid = true` e desconta o valor do saldo em
+`commission_credit`; o PIX em si o admin faz manualmente pelo app do MP
+(por isso o botão exige que a **chave PIX** do membro esteja preenchida
+antes — campo editável direto na própria tabela de pendências, salva
+sozinho ao sair do campo). Quando o Access Token do Mercado Pago entrar, o
+mesmo botão passa a chamar a API de transferência de verdade antes de
+marcar como pago — a UI não muda, só o que acontece por trás.
+
+Tabelas novas: `commission_credit` (linha única, `id = 1`, mesmo padrão de
+`app_config`) e as colunas `pix_key` em `members` e
+`commission_paid`/`commission_paid_at` em `cycles`. RLS: leitura liberada
+pra qualquer autenticado, escrita só admin — mesmo padrão de `app_config`.
+
 ## Configurar o `.env`
 
 ```bash

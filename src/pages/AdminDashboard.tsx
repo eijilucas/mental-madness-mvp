@@ -2,14 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../context/AuthContext";
-import { currentCycleMonth, nextCycleMonth } from "../lib/date";
+import { currentCycleMonth, formatCycleMonthLabel, nextCycleMonth } from "../lib/date";
 import { SYNTHETIC_LOGIN_DOMAIN } from "../lib/auth";
 import { extractFunctionErrorMessage } from "../lib/functions";
 import { Header } from "../components/Header";
 import { StatCard } from "../components/StatCard";
 import { MonthSelector } from "../components/MonthSelector";
 import { PencilIcon } from "../components/PencilIcon";
-import type { AppConfig, Cycle, Member, MemberWithCycle, Sale } from "../types";
+import type { AppConfig, CommissionCredit, Cycle, Member, MemberWithCycle, Sale } from "../types";
 
 const currencyFormatter = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
@@ -28,6 +28,10 @@ interface ProductTotal {
 
 interface SaleWithMember extends Sale {
   members: { name: string; coupon_code: string } | null;
+}
+
+interface PendingPayout extends Cycle {
+  members: Pick<Member, "id" | "name" | "coupon_code" | "pix_key" | "is_admin">;
 }
 
 type SortKey = "name" | "coupon" | "sales" | "gross" | "pieces" | "commission";
@@ -320,6 +324,131 @@ export function AdminDashboard() {
     setTogglingCycleId(null);
   }
 
+  // --- Pagamento de comissão via PIX (dia 5, crédito compartilhado) -------
+  // Por enquanto sem integração real com Mercado Pago: "Marcar como pago"
+  // só registra que foi pago e desconta do crédito — o admin faz o PIX pelo
+  // app do MP. Quando o Access Token entrar, esse mesmo botão passa a
+  // disparar a transferência de verdade antes de marcar.
+  const [commissionCredit, setCommissionCredit] = useState<CommissionCredit | null>(null);
+  const [creditTopUpDraft, setCreditTopUpDraft] = useState("");
+  const [savingCredit, setSavingCredit] = useState(false);
+  const [creditError, setCreditError] = useState<string | null>(null);
+  const [pendingPayouts, setPendingPayouts] = useState<PendingPayout[]>([]);
+  const [payingCycleId, setPayingCycleId] = useState<string | null>(null);
+  const [payoutError, setPayoutError] = useState<string | null>(null);
+  const [pixKeyDrafts, setPixKeyDrafts] = useState<Record<string, string>>({});
+  const [savingPixKeyId, setSavingPixKeyId] = useState<string | null>(null);
+
+  function loadPayments() {
+    supabase
+      .from("commission_credit")
+      .select("*")
+      .eq("id", 1)
+      .maybeSingle()
+      .then(({ data }) => setCommissionCredit(data ?? null));
+
+    supabase
+      .from("cycles")
+      .select("*, members!inner(id, name, coupon_code, pix_key, is_admin)")
+      .lt("cycle_month", currentCycleMonth())
+      .gt("commission_amount", 0)
+      .eq("commission_paid", false)
+      .order("cycle_month", { ascending: true })
+      .then(({ data }) => {
+        const payouts = ((data as unknown as PendingPayout[]) ?? []).filter((p) => !p.members.is_admin);
+        setPendingPayouts(payouts);
+        setPixKeyDrafts((prev) => {
+          const next = { ...prev };
+          for (const p of payouts) {
+            if (!(p.members.id in next)) next[p.members.id] = p.members.pix_key ?? "";
+          }
+          return next;
+        });
+      });
+  }
+
+  useEffect(() => {
+    loadPayments();
+
+    const channel = supabase
+      .channel("payments-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "commission_credit" }, () => loadPayments())
+      .on("postgres_changes", { event: "*", schema: "public", table: "cycles" }, () => loadPayments())
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  async function handleTopUpCredit() {
+    setCreditError(null);
+    const amount = Number(creditTopUpDraft);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setCreditError("Digita um valor válido, maior que zero.");
+      return;
+    }
+
+    setSavingCredit(true);
+    const newBalance = (commissionCredit?.balance ?? 0) + amount;
+    const { error } = await supabase
+      .from("commission_credit")
+      .update({ balance: newBalance, updated_at: new Date().toISOString() })
+      .eq("id", 1);
+    setSavingCredit(false);
+
+    if (error) {
+      setCreditError("Não deu pra recarregar. Tenta de novo.");
+      return;
+    }
+
+    setCreditTopUpDraft("");
+    loadPayments();
+  }
+
+  function handlePixKeyChange(memberId: string, value: string) {
+    setPixKeyDrafts((prev) => ({ ...prev, [memberId]: value }));
+  }
+
+  async function handlePixKeyBlur(memberId: string, originalValue: string) {
+    const value = (pixKeyDrafts[memberId] ?? "").trim();
+    if (value === (originalValue ?? "")) return;
+
+    setSavingPixKeyId(memberId);
+    await supabase.from("members").update({ pix_key: value || null }).eq("id", memberId);
+    setSavingPixKeyId(null);
+  }
+
+  async function handleMarkPaid(payout: PendingPayout) {
+    setPayoutError(null);
+
+    const pixKey = (pixKeyDrafts[payout.members.id] ?? payout.members.pix_key ?? "").trim();
+    if (!pixKey) {
+      setPayoutError(`Cadastra a chave PIX de ${payout.members.name} antes de marcar como pago.`);
+      return;
+    }
+
+    setPayingCycleId(payout.id);
+
+    const { error: cycleError } = await supabase
+      .from("cycles")
+      .update({ commission_paid: true, commission_paid_at: new Date().toISOString() })
+      .eq("id", payout.id);
+
+    if (cycleError) {
+      setPayingCycleId(null);
+      setPayoutError("Não deu pra marcar como pago. Tenta de novo.");
+      return;
+    }
+
+    const newBalance = (commissionCredit?.balance ?? 0) - payout.commission_amount;
+    await supabase.from("commission_credit").update({ balance: newBalance, updated_at: new Date().toISOString() }).eq("id", 1);
+
+    setPayingCycleId(null);
+    loadPayments();
+  }
+
   useEffect(() => {
     loadAppConfig();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -506,6 +635,103 @@ export function AdminDashboard() {
         <StatCard label="Peças a Entregar" value={String(totalPieces)} accent />
         <StatCard label="Comissões do Mês" value={currencyFormatter.format(totalCommission)} accent />
       </div>
+
+      <section className="mm-table-section" style={{ marginBottom: 24 }}>
+        <h2 className="mm-section-title">Pagamento de Comissão (PIX)</h2>
+        <div className="mm-label" style={{ marginBottom: 16 }}>
+          Crédito compartilhado que você carrega pra pagar todo mundo — dia 5, confere a lista abaixo e marca cada
+          um como pago (ainda manual: sem Access Token do Mercado Pago plugado, o PIX você faz pelo app).
+        </div>
+
+        {payoutError && (
+          <div className="mm-reset-banner mm-reset-banner-error">
+            {payoutError}
+            <button type="button" className="mm-link-btn" onClick={() => setPayoutError(null)}>
+              Fechar
+            </button>
+          </div>
+        )}
+        {creditError && (
+          <div className="mm-reset-banner mm-reset-banner-error">
+            {creditError}
+            <button type="button" className="mm-link-btn" onClick={() => setCreditError(null)}>
+              Fechar
+            </button>
+          </div>
+        )}
+
+        <div className="mm-admin-summary-grid" style={{ marginBottom: 20 }}>
+          <StatCard label="Saldo do Crédito" value={currencyFormatter.format(commissionCredit?.balance ?? 0)} accent />
+        </div>
+
+        <div className="mm-config-grid" style={{ marginBottom: 20 }}>
+          <div className="mm-field">
+            <label className="mm-label" htmlFor="credit-topup">
+              Recarregar crédito (R$)
+            </label>
+            <input
+              id="credit-topup"
+              type="number"
+              min={0}
+              step={0.01}
+              value={creditTopUpDraft}
+              onChange={(e) => setCreditTopUpDraft(e.target.value)}
+            />
+          </div>
+          <button type="button" className="mm-config-save-btn" disabled={savingCredit} onClick={handleTopUpCredit}>
+            {savingCredit ? "Salvando..." : "Adicionar"}
+          </button>
+        </div>
+
+        {pendingPayouts.length === 0 ? (
+          <div className="mm-empty-state">Nenhuma comissão pendente de pagamento.</div>
+        ) : (
+          <table className="mm-table">
+            <thead>
+              <tr>
+                <th>Membro</th>
+                <th>Mês</th>
+                <th>Comissão</th>
+                <th>Chave PIX</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {pendingPayouts.map((payout) => (
+                <tr key={payout.id}>
+                  <td>
+                    <span className="mm-member-row-name">{payout.members.name}</span>{" "}
+                    <span className="mm-member-row-coupon">{payout.members.coupon_code}</span>
+                  </td>
+                  <td>{formatCycleMonthLabel(payout.cycle_month)}</td>
+                  <td className="mm-cell-amount">{currencyFormatter.format(payout.commission_amount)}</td>
+                  <td>
+                    <input
+                      className="mm-inline-edit-input"
+                      type="text"
+                      placeholder="Chave PIX"
+                      value={pixKeyDrafts[payout.members.id] ?? ""}
+                      onChange={(e) => handlePixKeyChange(payout.members.id, e.target.value)}
+                      onBlur={() => handlePixKeyBlur(payout.members.id, payout.members.pix_key ?? "")}
+                      disabled={savingPixKeyId === payout.members.id}
+                    />
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="mm-link-btn"
+                      disabled={payingCycleId === payout.id}
+                      onClick={() => handleMarkPaid(payout)}
+                    >
+                      {payingCycleId === payout.id ? "Marcando..." : "Marcar como pago"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
 
       <section className="mm-table-section" style={{ marginBottom: 24 }}>
         <h2 className="mm-section-title">Adicionar Membro</h2>

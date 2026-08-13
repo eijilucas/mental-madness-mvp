@@ -24,6 +24,7 @@ create table if not exists members (
   coupon_code text not null unique,
   is_admin boolean not null default false,
   active boolean not null default true,
+  pix_key text, -- chave PIX pra pagamento de comissão (dia 5) — nullable, admin preenche
   created_at timestamptz not null default now()
 );
 
@@ -88,6 +89,10 @@ create table if not exists cycles (
   -- incrementando conforme manda cada remessa, não tudo de uma vez só.
   pieces_delivered_count integer not null default 0 check (pieces_delivered_count >= 0),
   pieces_delivered_at timestamptz, -- data da última entrega registrada
+  -- Pagamento de comissão via PIX (dia 5, crédito compartilhado) — ver
+  -- tabela commission_credit logo abaixo.
+  commission_paid boolean not null default false,
+  commission_paid_at timestamptz,
   updated_at timestamptz not null default now(),
   unique (member_id, cycle_month)
 );
@@ -119,6 +124,23 @@ create table if not exists app_config (
 );
 
 insert into app_config (id) values (1) on conflict (id) do nothing;
+
+-- ----------------------------------------------------------------------------
+-- TABELA: commission_credit
+-- Crédito compartilhado que o Vitor carrega pra pagar comissão via PIX todo
+-- dia 5 — um bolo só pra empresa inteira, não por afiliado. Linha única
+-- (id = 1), mesmo padrão de app_config. O desconto acontece manualmente por
+-- enquanto (admin marca cada comissão como paga no painel, o que já
+-- desconta do saldo aqui) — quando a integração com a API do Mercado Pago
+-- entrar, o desconto passa a ser automático junto com o envio do PIX.
+-- ----------------------------------------------------------------------------
+create table if not exists commission_credit (
+  id smallint primary key default 1 check (id = 1),
+  balance numeric(12,2) not null default 0,
+  updated_at timestamptz not null default now()
+);
+
+insert into commission_credit (id) values (1) on conflict (id) do nothing;
 
 -- ----------------------------------------------------------------------------
 -- FUNÇÃO: calculate_cycle_rewards
@@ -275,6 +297,7 @@ alter table sales enable row level security;
 alter table sale_items enable row level security;
 alter table cycles enable row level security;
 alter table app_config enable row level security;
+alter table commission_credit enable row level security;
 
 -- helper: é o membro admin logado?
 create or replace function is_admin_user()
@@ -356,6 +379,17 @@ drop policy if exists app_config_update_admin on app_config;
 create policy app_config_update_admin on app_config
   for update using (is_admin_user()) with check (is_admin_user());
 
+-- commission_credit: leitura liberada pra qualquer autenticado (só exibição,
+-- mesmo padrão de app_config)
+drop policy if exists commission_credit_select_authenticated on commission_credit;
+create policy commission_credit_select_authenticated on commission_credit
+  for select using (auth.role() = 'authenticated');
+
+-- commission_credit: só admin recarrega/ajusta o crédito
+drop policy if exists commission_credit_update_admin on commission_credit;
+create policy commission_credit_update_admin on commission_credit
+  for update using (is_admin_user()) with check (is_admin_user());
+
 -- Nenhuma outra policy de insert/update/delete é criada pros membros comuns:
 -- toda escrita em sales/sale_items/cycles (fora o toggle de entrega acima)
 -- acontece via Service Role (Edge Function do webhook Shopify, ou seed),
@@ -369,3 +403,4 @@ alter publication supabase_realtime add table sales;
 alter publication supabase_realtime add table cycles;
 alter publication supabase_realtime add table sale_items;
 alter publication supabase_realtime add table app_config;
+alter publication supabase_realtime add table commission_credit;

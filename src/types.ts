@@ -6,6 +6,7 @@ export interface Member {
   coupon_code: string;
   is_admin: boolean;
   active: boolean;
+  pix_key: string | null;
   created_at: string;
 }
 
@@ -40,6 +41,8 @@ export interface Cycle {
   commission_amount: number;
   pieces_delivered_count: number;
   pieces_delivered_at: string | null;
+  commission_paid: boolean;
+  commission_paid_at: string | null;
   updated_at: string;
 }
 
@@ -52,5 +55,11 @@ export interface AppConfig {
   commission_base: "gross" | "net";
   commission_rate: number;
   drop_piece_count: number;
+  updated_at: string;
+}
+
+export interface CommissionCredit {
+  id: number;
+  balance: number;
   updated_at: string;
 }
