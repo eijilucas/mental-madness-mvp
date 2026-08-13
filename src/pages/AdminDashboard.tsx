@@ -414,10 +414,13 @@ export function AdminDashboard() {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Enviar ${currencyFormatter.format(payout.commission_amount)} via PIX pra ${payout.members.name} (${payout.members.coupon_code})?`,
+    const typed = window.prompt(
+      `Vai enviar ${currencyFormatter.format(payout.commission_amount)} via PIX pra ${payout.members.name} (${payout.members.coupon_code}).\n\nPra confirmar, digite ENVIAR:`,
     );
-    if (!confirmed) return;
+    if (typed !== "ENVIAR") {
+      if (typed !== null) window.alert('Não digitou "ENVIAR" — nada foi enviado.');
+      return;
+    }
 
     setPayingCycleId(payout.id);
     await callPayCommissionPix([payout.id]);
@@ -434,10 +437,13 @@ export function AdminDashboard() {
     }
 
     const names = pendingPayouts.map((p) => `${p.members.name} — ${currencyFormatter.format(p.commission_amount)}`).join("\n");
-    const confirmed = window.confirm(
-      `Enviar PIX pra ${pendingPayouts.length} pessoa(s), total ${currencyFormatter.format(totalPendingPayout)}?\n\n${names}`,
+    const typed = window.prompt(
+      `Vai enviar PIX pra ${pendingPayouts.length} pessoa(s), total ${currencyFormatter.format(totalPendingPayout)}:\n\n${names}\n\nPra confirmar, digite ENVIAR:`,
     );
-    if (!confirmed) return;
+    if (typed !== "ENVIAR") {
+      if (typed !== null) window.alert('Não digitou "ENVIAR" — nada foi enviado.');
+      return;
+    }
 
     setPayingAll(true);
     await callPayCommissionPix(pendingPayouts.map((p) => p.id));
