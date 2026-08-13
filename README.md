@@ -140,18 +140,30 @@ Mercado Pago — o painel não controla saldo nenhum, só mostra quanto cada
 membro tem a receber. Todo dia 5, o admin abre a seção, vê o **total
 pendente somado de todo mundo** e a lista de comissões pendentes (ciclos
 **já fechados**, ou seja `cycle_month` anterior ao mês atual, com
-`commission_amount > 0` e `commission_paid = false`), dispara o PIX pelo
-app do MP pra cada um e marca como pago aqui (um por um, ou tudo de uma vez
-com o botão "Marcar todos como pago").
+`commission_amount > 0` e `commission_paid = false`), e clica em **"Enviar
+PIX"** — pede confirmação mostrando nome e valor de quem vai receber antes
+de disparar (um por um, ou "Enviar PIX para todos" pra mandar tudo de uma
+vez).
 
-**Ainda sem integração real com o Mercado Pago** — "Marcar como pago" só
-registra `cycles.commission_paid = true`; o PIX em si o admin faz
-manualmente pelo app do MP (por isso o botão exige que a **chave PIX** do
-membro esteja preenchida antes — campo editável direto na própria tabela
-de pendências, salva sozinho ao sair do campo). Quando o Access Token do
-Mercado Pago entrar, o mesmo botão passa a chamar a API de transferência
-de verdade antes de marcar como pago — a UI não muda, só o que acontece
-por trás.
+O botão chama de verdade a **API de Payouts do Mercado Pago**
+(`POST /v1/transaction-intents/process`) — só marca
+`cycles.commission_paid = true` depois que o Mercado Pago confirma a
+transferência (ver
+[`supabase/functions/pay-commission-pix/index.ts`](supabase/functions/pay-commission-pix/index.ts)).
+Exige a **chave PIX** do membro cadastrada antes (campo editável direto na
+tabela de pendências, salva sozinho ao sair do campo).
+
+**Falta só o secret pra ligar de verdade:**
+```bash
+npx supabase secrets set MERCADOPAGO_ACCESS_TOKEN=<access token do Vitor> --project-ref tflxotunokypiakkdyxs
+```
+Sem esse secret, a function recusa com erro claro ("Token do Mercado Pago
+ainda não configurado") em vez de fingir que enviou. **Importante:** não
+consegui confirmar 100% o formato exato do body da requisição contra a
+documentação (a página de referência detalhada não abriu na hora que
+pesquisei) — antes de confiar de olhos fechados, testa com um PIX de valor
+baixo primeiro (idealmente com credencial de teste do Mercado Pago) e
+ajusta `buildPayoutBody` na function se o formato vier diferente.
 
 Colunas novas: `pix_key` em `members` e
 `commission_paid`/`commission_paid_at` em `cycles` — sem tabela nova, RLS

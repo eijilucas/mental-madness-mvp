@@ -325,11 +325,12 @@ export function AdminDashboard() {
   }
 
   // --- Pagamento de comissão via PIX (dia 5) -------------------------------
-  // O crédito de R$5K fica no próprio app do Mercado Pago — aqui só mostra
-  // quanto cada um tem a receber (meses já fechados, ainda não pagos) e o
-  // total somado, pro Vitor saber quanto vai sair no total. "Marcar como
-  // pago" só registra que já foi — o PIX em si ele dispara pelo app do MP,
-  // pessoa por pessoa (ou tudo de uma vez, com o botão "Marcar todos").
+  // O crédito de R$5K fica no próprio app do Mercado Pago. O botão "Enviar
+  // PIX" chama a function pay-commission-pix, que usa a API de Payouts do
+  // Mercado Pago pra transferir de verdade — só marca commission_paid depois
+  // que o Mercado Pago confirma. Sem o Access Token configurado (ver
+  // supabase/functions/pay-commission-pix), a function recusa com erro
+  // claro em vez de fingir que enviou.
   const [pendingPayouts, setPendingPayouts] = useState<PendingPayout[]>([]);
   const [payingCycleId, setPayingCycleId] = useState<string | null>(null);
   const [payingAll, setPayingAll] = useState(false);
@@ -384,54 +385,63 @@ export function AdminDashboard() {
     setSavingPixKeyId(null);
   }
 
-  async function handleMarkPaid(payout: PendingPayout) {
+  async function callPayCommissionPix(cycleIds: string[]): Promise<boolean> {
+    const { data, error } = await supabase.functions.invoke("pay-commission-pix", {
+      body: { cycle_ids: cycleIds },
+    });
+
+    if (error || data?.error) {
+      setPayoutError((await extractFunctionErrorMessage(error, data)) ?? "Não deu pra enviar o PIX. Tenta de novo.");
+      return false;
+    }
+
+    const results = (data?.results ?? []) as { memberName: string; ok: boolean; reason?: string }[];
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length > 0) {
+      setPayoutError(`Falhou pra ${failed.map((r) => `${r.memberName}${r.reason ? ` (${r.reason})` : ""}`).join(", ")}.`);
+    }
+
+    loadPayments();
+    return failed.length === 0;
+  }
+
+  async function handleSendPix(payout: PendingPayout) {
     setPayoutError(null);
 
     const pixKey = (pixKeyDrafts[payout.members.id] ?? payout.members.pix_key ?? "").trim();
     if (!pixKey) {
-      setPayoutError(`Cadastra a chave PIX de ${payout.members.name} antes de marcar como pago.`);
+      setPayoutError(`Cadastra a chave PIX de ${payout.members.name} antes de enviar.`);
       return;
     }
+
+    const confirmed = window.confirm(
+      `Enviar ${currencyFormatter.format(payout.commission_amount)} via PIX pra ${payout.members.name} (${payout.members.coupon_code})?`,
+    );
+    if (!confirmed) return;
 
     setPayingCycleId(payout.id);
-
-    const { error: cycleError } = await supabase
-      .from("cycles")
-      .update({ commission_paid: true, commission_paid_at: new Date().toISOString() })
-      .eq("id", payout.id);
-
+    await callPayCommissionPix([payout.id]);
     setPayingCycleId(null);
-
-    if (cycleError) {
-      setPayoutError("Não deu pra marcar como pago. Tenta de novo.");
-      return;
-    }
-
-    loadPayments();
   }
 
-  async function handleMarkAllPaid() {
+  async function handleSendPixAll() {
     setPayoutError(null);
 
     const missingPixKey = pendingPayouts.find((p) => !(pixKeyDrafts[p.members.id] ?? p.members.pix_key ?? "").trim());
     if (missingPixKey) {
-      setPayoutError(`Cadastra a chave PIX de ${missingPixKey.members.name} antes de marcar todos como pago.`);
+      setPayoutError(`Cadastra a chave PIX de ${missingPixKey.members.name} antes de enviar pra todos.`);
       return;
     }
+
+    const names = pendingPayouts.map((p) => `${p.members.name} — ${currencyFormatter.format(p.commission_amount)}`).join("\n");
+    const confirmed = window.confirm(
+      `Enviar PIX pra ${pendingPayouts.length} pessoa(s), total ${currencyFormatter.format(totalPendingPayout)}?\n\n${names}`,
+    );
+    if (!confirmed) return;
 
     setPayingAll(true);
-    const { error } = await supabase
-      .from("cycles")
-      .update({ commission_paid: true, commission_paid_at: new Date().toISOString() })
-      .in("id", pendingPayouts.map((p) => p.id));
+    await callPayCommissionPix(pendingPayouts.map((p) => p.id));
     setPayingAll(false);
-
-    if (error) {
-      setPayoutError("Não deu pra marcar todos como pago. Tenta de novo.");
-      return;
-    }
-
-    loadPayments();
   }
 
   useEffect(() => {
@@ -626,8 +636,9 @@ export function AdminDashboard() {
       <section className="mm-table-section" style={{ marginBottom: 24 }}>
         <h2 className="mm-section-title">Pagamento de Comissão (PIX)</h2>
         <div className="mm-label" style={{ marginBottom: 16 }}>
-          Dia 5, confere quanto cada um tem a receber (meses já fechados) e dispara o PIX pelo app do Mercado Pago —
-          o crédito fica lá, aqui só é o controle de quem já foi pago.
+          Dia 5, confere quanto cada um tem a receber (meses já fechados) e clica em "Enviar PIX" — o valor sai
+          direto do crédito no Mercado Pago pra chave PIX do membro. Só marca como pago depois que o Mercado Pago
+          confirma o envio.
         </div>
 
         {payoutError && (
@@ -682,9 +693,9 @@ export function AdminDashboard() {
                         type="button"
                         className="mm-link-btn"
                         disabled={payingCycleId === payout.id || payingAll}
-                        onClick={() => handleMarkPaid(payout)}
+                        onClick={() => handleSendPix(payout)}
                       >
-                        {payingCycleId === payout.id ? "Marcando..." : "Marcar como pago"}
+                        {payingCycleId === payout.id ? "Enviando..." : "Enviar PIX"}
                       </button>
                     </td>
                   </tr>
@@ -697,9 +708,9 @@ export function AdminDashboard() {
               className="mm-config-save-btn"
               style={{ marginTop: 16 }}
               disabled={payingAll}
-              onClick={handleMarkAllPaid}
+              onClick={handleSendPixAll}
             >
-              {payingAll ? "Marcando..." : `Marcar todos como pago (${currencyFormatter.format(totalPendingPayout)})`}
+              {payingAll ? "Enviando..." : `Enviar PIX para todos (${currencyFormatter.format(totalPendingPayout)})`}
             </button>
           </>
         )}
