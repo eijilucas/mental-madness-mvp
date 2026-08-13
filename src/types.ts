@@ -57,9 +57,3 @@ export interface AppConfig {
   drop_piece_count: number;
   updated_at: string;
 }
-
-export interface CommissionCredit {
-  id: number;
-  balance: number;
-  updated_at: string;
-}
