@@ -305,10 +305,13 @@ create policy members_update_admin on members
   for update using (is_admin_user()) with check (is_admin_user());
 
 -- members: só admin apaga membro de vez (botão "Excluir" no painel — apaga
--- em cascata sales/sale_items/cycles desse membro, é permanente)
+-- em cascata sales/sale_items/cycles desse membro, é permanente). Bloqueia
+-- apagar uma linha que é admin, mesmo por outro admin — reforço de RLS além
+-- da checagem que já existe na Edge Function delete-member, pra fechar a
+-- brecha de chamar a REST API direto sem passar pela function.
 drop policy if exists members_delete_admin on members;
 create policy members_delete_admin on members
-  for delete using (is_admin_user());
+  for delete using (is_admin_user() and not is_admin);
 
 -- sales: cada membro vê só as próprias vendas; admin vê todas
 drop policy if exists sales_select_own_or_admin on sales;
