@@ -743,7 +743,8 @@ input {
   width: 180px;
 }
 
-.mm-config-grid .mm-field input {
+.mm-config-grid .mm-field input,
+.mm-config-grid .mm-field select {
   height: 42px;
   box-sizing: border-box;
 }
@@ -785,7 +786,8 @@ input {
   margin-bottom: 6px;
 }
 
-.mm-field input {
+.mm-field input,
+.mm-field select {
   width: 100%;
   background: var(--bg-frame);
   border: 1px solid var(--border-frame);
@@ -793,9 +795,11 @@ input {
   padding: 10px 12px;
   color: var(--text-primary);
   font-size: 14px;
+  font-family: inherit;
 }
 
-.mm-field input:focus {
+.mm-field input:focus,
+.mm-field select:focus {
   outline: none;
   border-color: var(--accent);
 }
