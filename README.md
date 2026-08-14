@@ -148,6 +148,13 @@ adicionar, mas fica fora do escopo deste MVP.
   normalmente, igual uma venda vinda do webhook (`source = 'shopify'`). Na
   tabela "Vendas do Mês" essas linhas aparecem com uma tag "WhatsApp" pra
   diferenciar.
+- **Remover venda**: botão "Remover" em cada linha da tabela "Vendas do Mês"
+  (funciona pra venda manual ou vinda da Shopify — útil pra corrigir
+  lançamento errado ou refletir um cancelamento que não veio pelo webhook).
+  Chama a function `delete-sale` (só admin), apaga a linha em `sales` e o
+  trigger recalcula o ciclo do membro na hora. Pede confirmação simples
+  antes (não precisa digitar nada, ao contrário de excluir membro — é bem
+  menos destrutivo, afeta uma venda só).
 - **Desativar sem apagar** (`active = false`) não tem mais botão na UI, mas
   o mecanismo continua existindo — quem preferir manter o histórico e só
   tirar o membro da lista principal pode fazer via SQL/Table Editor:

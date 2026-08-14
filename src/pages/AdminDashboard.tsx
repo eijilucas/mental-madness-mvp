@@ -349,6 +349,30 @@ export function AdminDashboard() {
     setReloadTick((t) => t + 1);
   }
 
+  const [deletingSaleId, setDeletingSaleId] = useState<string | null>(null);
+  const [deleteSaleError, setDeleteSaleError] = useState<string | null>(null);
+
+  async function handleDeleteSale(sale: SaleWithMember) {
+    const confirmed = window.confirm(
+      `Remover a venda de ${currencyFormatter.format(sale.gross_amount)} de ${sale.members?.name ?? "—"} (${dateFormatter.format(new Date(sale.sale_date))})? Isso recalcula o ciclo do mês dele na hora.`,
+    );
+    if (!confirmed) return;
+
+    setDeleteSaleError(null);
+    setDeletingSaleId(sale.id);
+    const { data, error } = await supabase.functions.invoke("delete-sale", {
+      body: { sale_id: sale.id },
+    });
+    setDeletingSaleId(null);
+
+    if (error || data?.error) {
+      setDeleteSaleError((await extractFunctionErrorMessage(error, data)) ?? "Não deu pra remover a venda. Tenta de novo.");
+      return;
+    }
+
+    setReloadTick((t) => t + 1);
+  }
+
   const [reactivatingId, setReactivatingId] = useState<string | null>(null);
 
   async function handleReactivateMember(id: string) {
@@ -1216,6 +1240,16 @@ export function AdminDashboard() {
 
       <section className="mm-table-section" style={{ marginTop: 24 }}>
         <h2 className="mm-section-title">Vendas do Mês (Todos os Membros)</h2>
+
+        {deleteSaleError && (
+          <div className="mm-reset-banner mm-reset-banner-error">
+            {deleteSaleError}
+            <button type="button" className="mm-link-btn" onClick={() => setDeleteSaleError(null)}>
+              Fechar
+            </button>
+          </div>
+        )}
+
         {recentSales.length === 0 ? (
           <div className="mm-empty-state">Nenhuma venda registrada neste mês.</div>
         ) : (
@@ -1226,6 +1260,7 @@ export function AdminDashboard() {
                 <th>Produtos</th>
                 <th>Data</th>
                 <th>Valor</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -1245,6 +1280,16 @@ export function AdminDashboard() {
                   </td>
                   <td>{dateFormatter.format(new Date(sale.sale_date))}</td>
                   <td className="mm-cell-amount">{currencyFormatter.format(sale.gross_amount)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="mm-link-btn mm-remove-btn"
+                      disabled={deletingSaleId === sale.id}
+                      onClick={() => handleDeleteSale(sale)}
+                    >
+                      {deletingSaleId === sale.id ? "Removendo..." : "Remover"}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
