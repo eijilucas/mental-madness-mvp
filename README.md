@@ -379,6 +379,15 @@ sem nenhuma credencial real configurada. Quando for ativar:
 4. Copie o "Signing secret" gerado pela Shopify (é o mesmo pra todos os
    webhooks) para o secret `SHOPIFY_WEBHOOK_SECRET` do passo 2.
 
+> **Cupons que já existiam antes do webhook estar configurado** não são
+> pegos retroativamente (o webhook só dispara pra evento novo). Pra importar
+> um backlog de cupons de uma vez (ex: export CSV da Shopify em
+> Discounts > Export), rode uma migration única tipo
+> [`20260814000008_bulk_import_shopify_coupons.sql`](supabase/migrations/20260814000008_bulk_import_shopify_coupons.sql)
+> (`insert into members (...) on conflict (coupon_code) do nothing`, seguro
+> rodar de novo) e depois `node scripts/create-member-logins.mjs` pra criar o
+> login de todo mundo que entrou sem conta.
+
 A function identifica o cupom em `discount_codes[0].code` (ou
 `discount_applications` como fallback), busca o membro dono do cupom
 (case-insensitive) e insere a venda — o trigger do banco cuida do resto. Os
