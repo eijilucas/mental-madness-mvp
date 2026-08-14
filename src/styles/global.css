@@ -490,6 +490,18 @@ input {
   border-collapse: collapse;
 }
 
+.mm-table-scroll {
+  max-height: 560px;
+  overflow-y: auto;
+}
+
+.mm-table-scroll .mm-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-card);
+  z-index: 1;
+}
+
 .mm-table th {
   text-align: left;
   font-size: 11px;

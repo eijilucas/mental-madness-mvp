@@ -886,58 +886,6 @@ export function AdminDashboard() {
       </section>
 
       <section className="mm-table-section" style={{ marginBottom: 24 }}>
-        <h2 className="mm-section-title">Adicionar Membro</h2>
-
-        {addMemberResult && (
-          <div className="mm-reset-banner">
-            Membro <strong>{addMemberResult.coupon}</strong> criado com login. Senha temporária:{" "}
-            <strong>{addMemberResult.password}</strong> (vai pedir pra trocar no primeiro login).
-            <button type="button" className="mm-link-btn" onClick={() => setAddMemberResult(null)}>
-              Fechar
-            </button>
-          </div>
-        )}
-        {addMemberError && (
-          <div className="mm-reset-banner mm-reset-banner-error">
-            {addMemberError}
-            <button type="button" className="mm-link-btn" onClick={() => setAddMemberError(null)}>
-              Fechar
-            </button>
-          </div>
-        )}
-
-        <div className="mm-config-grid">
-          <div className="mm-field">
-            <label className="mm-label" htmlFor="new-member-name">
-              Nome
-            </label>
-            <input
-              id="new-member-name"
-              type="text"
-              value={newMemberName}
-              onChange={(e) => setNewMemberName(e.target.value)}
-            />
-          </div>
-
-          <div className="mm-field">
-            <label className="mm-label" htmlFor="new-member-coupon">
-              Cupom
-            </label>
-            <input
-              id="new-member-coupon"
-              type="text"
-              value={newMemberCoupon}
-              onChange={(e) => setNewMemberCoupon(e.target.value)}
-            />
-          </div>
-
-          <button type="button" className="mm-config-save-btn" disabled={addingMember} onClick={handleAddMember}>
-            {addingMember ? "Adicionando..." : "Adicionar"}
-          </button>
-        </div>
-      </section>
-
-      <section className="mm-table-section" style={{ marginBottom: 24 }}>
         <h2 className="mm-section-title">Adicionar Venda Manual (WhatsApp)</h2>
         <div className="mm-label" style={{ marginBottom: 16 }}>
           Pra pedido fechado fora da Shopify. Entra no ciclo do mês igual a uma venda normal.
@@ -1007,6 +955,58 @@ export function AdminDashboard() {
 
           <button type="button" className="mm-config-save-btn" disabled={addingManualSale} onClick={handleAddManualSale}>
             {addingManualSale ? "Registrando..." : "Registrar Venda"}
+          </button>
+        </div>
+      </section>
+
+      <section className="mm-table-section" style={{ marginBottom: 24 }}>
+        <h2 className="mm-section-title">Adicionar Membro</h2>
+
+        {addMemberResult && (
+          <div className="mm-reset-banner">
+            Membro <strong>{addMemberResult.coupon}</strong> criado com login. Senha temporária:{" "}
+            <strong>{addMemberResult.password}</strong> (vai pedir pra trocar no primeiro login).
+            <button type="button" className="mm-link-btn" onClick={() => setAddMemberResult(null)}>
+              Fechar
+            </button>
+          </div>
+        )}
+        {addMemberError && (
+          <div className="mm-reset-banner mm-reset-banner-error">
+            {addMemberError}
+            <button type="button" className="mm-link-btn" onClick={() => setAddMemberError(null)}>
+              Fechar
+            </button>
+          </div>
+        )}
+
+        <div className="mm-config-grid">
+          <div className="mm-field">
+            <label className="mm-label" htmlFor="new-member-name">
+              Nome
+            </label>
+            <input
+              id="new-member-name"
+              type="text"
+              value={newMemberName}
+              onChange={(e) => setNewMemberName(e.target.value)}
+            />
+          </div>
+
+          <div className="mm-field">
+            <label className="mm-label" htmlFor="new-member-coupon">
+              Cupom
+            </label>
+            <input
+              id="new-member-coupon"
+              type="text"
+              value={newMemberCoupon}
+              onChange={(e) => setNewMemberCoupon(e.target.value)}
+            />
+          </div>
+
+          <button type="button" className="mm-config-save-btn" disabled={addingMember} onClick={handleAddMember}>
+            {addingMember ? "Adicionando..." : "Adicionar"}
           </button>
         </div>
       </section>
@@ -1099,6 +1099,7 @@ export function AdminDashboard() {
         ) : sortedRows.length === 0 ? (
           <div className="mm-empty-state">Nenhum membro encontrado pra "{memberSearch}".</div>
         ) : (
+          <div className="mm-table-scroll">
           <table className="mm-table">
             <thead>
               <tr>
@@ -1241,6 +1242,7 @@ export function AdminDashboard() {
               })}
             </tbody>
           </table>
+          </div>
         )}
 
         {inactiveRows.length > 0 && (
