@@ -707,7 +707,7 @@ export function AdminDashboard() {
             <button
               type="button"
               className="mm-config-save-btn"
-              style={{ marginTop: 16 }}
+              style={{ marginTop: 16, marginBottom: 16 }}
               disabled={payingAll}
               onClick={handleSendPixAll}
             >
