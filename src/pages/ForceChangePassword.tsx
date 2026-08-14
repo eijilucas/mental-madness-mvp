@@ -38,7 +38,7 @@ export function ForceChangePassword() {
       <div className="mm-auth-card">
         <div className="mm-auth-brand">
           <img src="/logo-m.png" alt="Mental Madness" className="mm-logo-mark" style={{ width: 40, height: 40 }} />
-          <span className="mm-wordmark">MENTAL MADNESS</span>
+          <span className="mm-wordmark">Mental Madness</span>
         </div>
 
         <div className="mm-label" style={{ marginBottom: 16, textAlign: "center" }}>

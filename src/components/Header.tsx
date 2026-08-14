@@ -19,7 +19,7 @@ export function Header({ memberName, couponCode, onSignOut, rightSlot, celebrate
         <div className={`mm-logo-mark-wrap${celebrate ? " mm-logo-celebrate" : ""}`}>
           <img src="/logo-m.png" alt="Mental Madness" className="mm-logo-mark" />
         </div>
-        <span className="mm-wordmark">MENTAL MADNESS</span>
+        <span className="mm-wordmark">Mental Madness</span>
       </div>
 
       <div className="mm-header-actions">
