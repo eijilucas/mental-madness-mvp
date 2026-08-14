@@ -18,16 +18,25 @@ faixas do mês.
 
 | Vendas no mês | Recompensa |
 |---|---|
-| a cada 5 vendas (até 15) | 1 peça de roupa |
-| passando de 15 | todas as peças do drop atual + 5% de comissão sobre o valor vendido no mês |
+| 5 | 1 peça de roupa |
+| 6 | comissão de 5% já fica ativa, sobre o valor vendido no mês inteiro |
+| 10 | 2 peças (comissão continua) |
+| passando de 15 | todas as peças do drop atual + comissão |
+| passando de 30 | comissão (sem mudança nas peças, só reforça visualmente) |
 
+> Atualizado em 2026-08-14: comissão de 5% passa a ativar a partir de **6
+> vendas** (antes só a partir de 15), pra facilitar — decisão do cliente. A
+> base de cálculo continua a mesma (valor total vendido no mês, não só as
+> vendas a partir da 6ª). Peças continuam exatamente na mesma regra de
+> antes (5 → 1, 10 → 2, 15+ → todas do drop).
+>
 > Atualizado em 2026-08-09: antes, só quem passava de 30 vendas ganhava
 > comissão (10%), e o prêmio de peças era um número fixo (3). O cliente
-> decidiu simplificar duas coisas: (1) a comissão de 5% já entra a partir de
-> 15 vendas, sem taxa maior a partir de 30 (30 continua marcado no painel só
-> por fazer parte da identidade visual aprovada, mas não muda mais o
-> prêmio); (2) o prêmio de peças passa a ser "uma unidade de cada produto
-> ativo no drop atual" em vez de um número fixo.
+> decidiu simplificar duas coisas: (1) a comissão de 5% já entrava a partir
+> de 15 vendas, sem taxa maior a partir de 30 (30 continua marcado no
+> painel só por fazer parte da identidade visual aprovada, mas não muda
+> mais o prêmio); (2) o prêmio de peças passa a ser "uma unidade de cada
+> produto ativo no drop atual" em vez de um número fixo.
 
 Toda a lógica está isolada na função SQL `calculate_cycle_rewards` em
 [`schema.sql`](schema.sql) — é o único lugar que precisa mudar se a regra

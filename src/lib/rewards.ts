@@ -7,7 +7,7 @@
 // de app_config (buscado em MemberDashboard) — nunca fixar o valor aqui,
 // senão o texto fica desatualizado assim que o admin mudar a configuração.
 
-export const CYCLE_MILESTONES = [5, 10, 15, 30] as const;
+export const CYCLE_MILESTONES = [5, 6, 10, 15, 30] as const;
 
 export interface MilestoneProgress {
   milestone: number;
@@ -20,6 +20,7 @@ export interface MilestoneProgress {
 // mostram "+" porque o prêmio vale a partir dali pra cima.
 const MILESTONE_DISPLAY: Record<number, string> = {
   5: "5",
+  6: "6",
   10: "10",
   15: "15+",
   30: "30+",
@@ -38,7 +39,8 @@ function milestoneLabels(dropPieceCount: number, commissionRate: number): Record
   const pct = formatCommissionPct(commissionRate);
   return {
     5: "1 peça",
-    10: "2 peças",
+    6: `${pct} de comissão`,
+    10: `2 peças + ${pct}`,
     15: `${dropPieceCount} peça${dropPieceCount === 1 ? "" : "s"} do drop + ${pct}`,
     30: `${pct} de comissão`,
   };

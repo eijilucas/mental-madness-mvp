@@ -52,7 +52,10 @@ export function CycleProgress({ salesCount, dropPieceCount, commissionRate }: Cy
             <strong>5 vendas</strong> = 1 peça.
           </li>
           <li>
-            <strong>10 vendas</strong> = 2 peças.
+            <strong>6 vendas</strong> = {pct} de comissão.
+          </li>
+          <li>
+            <strong>10 vendas</strong> = 2 peças + {pct} de comissão.
           </li>
           <li>
             <strong>15+ vendas</strong> = todas as peças do drop ({dropPieceCount}) + {pct} de comissão.

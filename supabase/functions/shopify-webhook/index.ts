@@ -10,15 +10,19 @@
 // O trigger do banco recalcula o ciclo do mês automaticamente em qualquer
 // insert/delete de `sales`.
 //
-// NÃO ESTÁ PLUGADA A CREDENCIAIS REAIS AINDA. Para ativar de verdade:
+// Atende DUAS lojas Shopify na mesma URL — cada uma com seu próprio signing
+// secret (SHOPIFY_WEBHOOK_SECRET_BASIC e SHOPIFY_WEBHOOK_SECRET_EXCLUSIVOS).
+// A verificação HMAC testa contra os dois, aceita se bater com qualquer um.
+//
 //   1. Defina os secrets da function:
-//        npx supabase secrets set SHOPIFY_WEBHOOK_SECRET=xxxxx
+//        npx supabase secrets set SHOPIFY_WEBHOOK_SECRET_BASIC=xxxxx
+//        npx supabase secrets set SHOPIFY_WEBHOOK_SECRET_EXCLUSIVOS=xxxxx
 //        npx supabase secrets set SUPABASE_SERVICE_ROLE_KEY=xxxxx   (já vem
 //          disponível automaticamente em produção, mas em alguns setups
 //          precisa ser setada manualmente)
 //   2. Deploy: npx supabase functions deploy shopify-webhook
-//   3. No admin da Shopify: Settings -> Notifications -> Webhooks -> Create
-//      webhook, uma vez pra cada evento (mesma URL em todos):
+//   3. No admin de CADA loja Shopify: Settings -> Notifications -> Webhooks
+//      -> Create webhook, uma vez pra cada evento (mesma URL em todos):
 //        -> Event: "Order payment" (orders/paid)
 //        -> Event: "Order cancellation" (orders/cancelled)
 //        -> Event: "Refund create" (refunds/create)
@@ -27,19 +31,22 @@
 //           (discount_codes/create), que a function também entende.
 //        -> Format: JSON
 //        -> URL: https://<seu-projeto>.supabase.co/functions/v1/shopify-webhook
-//   4. Copie o "Signing secret" (é o mesmo pra todos os webhooks) para
-//      SHOPIFY_WEBHOOK_SECRET.
+//   4. Copie o "Signing secret" de cada loja pro secret correspondente.
 //
-// Até lá, esta função roda em modo "pronta pra plugar": ela funciona
-// perfeitamente contra um payload de teste (ver README), só a verificação de
-// assinatura HMAC fica sem efeito enquanto SHOPIFY_WEBHOOK_SECRET não existir.
+// Se nenhum dos dois secrets estiver configurado, a verificação HMAC fica
+// sem efeito (modo dev) — funciona contra payload de teste sem assinatura.
 // ============================================================================
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const SHOPIFY_WEBHOOK_SECRET = Deno.env.get("SHOPIFY_WEBHOOK_SECRET") ?? "";
+// Duas lojas Shopify, cada uma com o próprio signing secret — testa a
+// assinatura contra os dois (a request só precisa bater com um).
+const SHOPIFY_WEBHOOK_SECRETS = [
+  Deno.env.get("SHOPIFY_WEBHOOK_SECRET_BASIC") ?? "",
+  Deno.env.get("SHOPIFY_WEBHOOK_SECRET_EXCLUSIVOS") ?? "",
+].filter(Boolean);
 
 // Precisa ficar igual a SYNTHETIC_LOGIN_DOMAIN em src/lib/auth.ts — é o
 // domínio fake usado pra logar sem precisar de e-mail de verdade.
@@ -108,25 +115,32 @@ function extractDiscountCode(payload: Record<string, unknown>): string | null {
   return null;
 }
 
-async function verifyShopifyHmac(rawBody: string, hmacHeader: string | null): Promise<boolean> {
-  if (!SHOPIFY_WEBHOOK_SECRET) {
-    // Sem secret configurado ainda (ambiente de desenvolvimento): não bloqueia,
-    // mas deixa claro nos logs que a verificação está desativada.
-    console.warn("SHOPIFY_WEBHOOK_SECRET não configurado — pulando verificação HMAC (modo dev).");
-    return true;
-  }
-  if (!hmacHeader) return false;
-
+async function computeHmac(secret: string, rawBody: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(SHOPIFY_WEBHOOK_SECRET),
+    new TextEncoder().encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
   );
   const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody));
-  const computedHmac = btoa(String.fromCharCode(...new Uint8Array(signature)));
-  return computedHmac === hmacHeader;
+  return btoa(String.fromCharCode(...new Uint8Array(signature)));
+}
+
+async function verifyShopifyHmac(rawBody: string, hmacHeader: string | null): Promise<boolean> {
+  if (SHOPIFY_WEBHOOK_SECRETS.length === 0) {
+    // Sem secret configurado ainda (ambiente de desenvolvimento): não bloqueia,
+    // mas deixa claro nos logs que a verificação está desativada.
+    console.warn("Nenhum SHOPIFY_WEBHOOK_SECRET_* configurado — pulando verificação HMAC (modo dev).");
+    return true;
+  }
+  if (!hmacHeader) return false;
+
+  for (const secret of SHOPIFY_WEBHOOK_SECRETS) {
+    const computedHmac = await computeHmac(secret, rawBody);
+    if (computedHmac === hmacHeader) return true;
+  }
+  return false;
 }
 
 function extractCouponCode(order: ShopifyOrderPayload): string | null {

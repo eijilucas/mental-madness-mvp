@@ -136,13 +136,15 @@ insert into app_config (id) values (1) on conflict (id) do nothing;
 --
 -- Regras (ver README.md para a explicação completa):
 --   5 vendas  -> 1 peça (a cada 5, enquanto < 15)
+--   6 vendas  -> comissão de `commission_rate` (5% fixo) já fica ativa,
+--                sobre o valor vendido no mês inteiro (bruto ou líquido,
+--                conforme app_config.commission_base) — decisão do cliente
+--                em 2026-08-14, pra facilitar (antes só ativava em 15).
 --   15 vendas -> todas as peças do drop atual (app_config.drop_piece_count)
---                + comissão de `commission_rate` (5% fixo) sobre o valor
---                vendido no mês (bruto ou líquido, conforme
---                app_config.commission_base). A mesma taxa vale pra quem
---                passa de 30 — não existe mais um tier de comissão maior a
---                partir de 30 (decisão do cliente em 2026-08-09; antes era
---                10% só a partir de 30 vendas).
+--                + comissão (que já estava ativa desde 6). A mesma taxa
+--                vale pra quem passa de 30 — não existe mais um tier de
+--                comissão maior a partir de 30 (decisão do cliente em
+--                2026-08-09; antes era 10% só a partir de 30 vendas).
 -- ----------------------------------------------------------------------------
 create or replace function calculate_cycle_rewards(
   p_sales_count integer,
@@ -172,7 +174,7 @@ begin
     v_commission := round(v_commission_base_amount * v_rate, 2);
   elsif p_sales_count >= 5 then
     v_pieces := floor(p_sales_count / 5)::integer;
-    v_commission := 0;
+    v_commission := case when p_sales_count >= 6 then round(v_commission_base_amount * v_rate, 2) else 0 end;
   else
     v_pieces := 0;
     v_commission := 0;
