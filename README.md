@@ -190,6 +190,13 @@ pra inferir só pelo texto) e `commission_paid`/`commission_paid_at` em
 `cycles` — sem tabela nova, RLS já coberta pelas policies existentes
 dessas duas tabelas.
 
+**Taxa de transferência do Asaas:** as 30 primeiras transferências PIX de
+cada mês (calendário, não ciclo de vendas) são grátis; a partir da 31ª o
+Asaas cobra R$2 por operação. O painel mostra um aviso informativo (conta
+quantas comissões já foram pagas neste mês via `commission_paid_at`) — essa
+taxa é custo operacional do Vitor, **nunca desconta da comissão do
+afiliado**.
+
 ## Configurar o `.env`
 
 ```bash

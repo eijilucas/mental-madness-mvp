@@ -346,6 +346,7 @@ export function AdminDashboard() {
   const [pixKeyDrafts, setPixKeyDrafts] = useState<Record<string, string>>({});
   const [pixKeyTypeDrafts, setPixKeyTypeDrafts] = useState<Record<string, string>>({});
   const [savingPixKeyId, setSavingPixKeyId] = useState<string | null>(null);
+  const [transfersUsedThisMonth, setTransfersUsedThisMonth] = useState(0);
 
   function loadPayments() {
     supabase
@@ -373,6 +374,21 @@ export function AdminDashboard() {
           return next;
         });
       });
+
+    // Asaas dá 30 transferências PIX grátis por mês (calendário, não ciclo
+    // de vendas) — a partir da 31ª cobra R$2 cada. Conta quantas comissões
+    // já foram pagas (= quantos PIX já saíram) neste mês corrente, pra
+    // avisar o admin do custo operacional antes de disparar o resto. Isso é
+    // só informativo — nunca desconta da comissão do afiliado.
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+    supabase
+      .from("cycles")
+      .select("id", { count: "exact", head: true })
+      .eq("commission_paid", true)
+      .gte("commission_paid_at", monthStart.toISOString())
+      .then(({ count }) => setTransfersUsedThisMonth(count ?? 0));
   }
 
   useEffect(() => {
@@ -579,6 +595,11 @@ export function AdminDashboard() {
 
   const totalPendingPayout = pendingPayouts.reduce((sum, p) => sum + p.commission_amount, 0);
 
+  const ASAAS_FREE_TRANSFERS_PER_MONTH = 30;
+  const ASAAS_FEE_PER_TRANSFER = 2;
+  const transfersIfSendAllNow = transfersUsedThisMonth + pendingPayouts.length;
+  const extraTransferFees = Math.max(0, transfersIfSendAllNow - ASAAS_FREE_TRANSFERS_PER_MONTH) * ASAAS_FEE_PER_TRANSFER;
+
   const totalSales = rows.reduce((sum, r) => sum + (r.cycle?.sales_count ?? 0), 0);
   const totalGross = rows.reduce((sum, r) => sum + (r.cycle?.gross_total ?? 0), 0);
   const totalPieces = rows.reduce((sum, r) => sum + (r.cycle?.pieces_earned ?? 0), 0);
@@ -679,8 +700,15 @@ export function AdminDashboard() {
           </div>
         )}
 
-        <div className="mm-admin-summary-grid" style={{ marginBottom: 20 }}>
+        <div className="mm-admin-summary-grid" style={{ marginBottom: 8 }}>
           <StatCard label="Comissão Total a Enviar" value={currencyFormatter.format(totalPendingPayout)} accent />
+        </div>
+
+        <div className="mm-label" style={{ marginBottom: 20 }}>
+          {transfersUsedThisMonth} de {ASAAS_FREE_TRANSFERS_PER_MONTH} transferências PIX grátis já usadas este mês
+          {extraTransferFees > 0
+            ? ` — enviar as ${pendingPayouts.length} pendentes agora passaria do limite e custaria ~${currencyFormatter.format(extraTransferFees)} em taxa do Asaas (R$2 por transferência extra).`
+            : "."}
         </div>
 
         {pendingPayouts.length === 0 ? (
