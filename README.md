@@ -385,8 +385,10 @@ sem nenhuma credencial real configurada. Quando for ativar:
 > Discounts > Export), rode uma migration única tipo
 > [`20260814000008_bulk_import_shopify_coupons.sql`](supabase/migrations/20260814000008_bulk_import_shopify_coupons.sql)
 > (`insert into members (...) on conflict (coupon_code) do nothing`, seguro
-> rodar de novo) e depois `node scripts/create-member-logins.mjs` pra criar o
-> login de todo mundo que entrou sem conta.
+> rodar de novo) e depois use a caixa **"Criar Login para Pendentes"** no
+> painel admin (ou `node scripts/create-member-logins.mjs` pelo terminal)
+> pra criar o login de todo mundo que entrou sem conta, todos com a mesma
+> senha temporária.
 
 A function identifica o cupom em `discount_codes[0].code` (ou
 `discount_applications` como fallback), busca o membro dono do cupom

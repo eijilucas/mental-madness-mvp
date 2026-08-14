@@ -349,6 +349,48 @@ export function AdminDashboard() {
     setReloadTick((t) => t + 1);
   }
 
+  const [bulkLoginPassword, setBulkLoginPassword] = useState("mentalmadness2026");
+  const [creatingBulkLogins, setCreatingBulkLogins] = useState(false);
+  const [bulkLoginResult, setBulkLoginResult] = useState<string | null>(null);
+  const [bulkLoginError, setBulkLoginError] = useState<string | null>(null);
+
+  async function handleBulkCreateLogins() {
+    setBulkLoginError(null);
+    setBulkLoginResult(null);
+
+    const password = bulkLoginPassword.trim();
+    if (password.length < 6) {
+      setBulkLoginError("Senha temporária precisa ter pelo menos 6 caracteres.");
+      return;
+    }
+
+    setCreatingBulkLogins(true);
+    const { data, error } = await supabase.functions.invoke("bulk-create-logins", {
+      body: { temp_password: password },
+    });
+    setCreatingBulkLogins(false);
+
+    if (error || data?.error) {
+      setBulkLoginError((await extractFunctionErrorMessage(error, data)) ?? "Não deu pra criar os logins. Tenta de novo.");
+      return;
+    }
+
+    const results = (data?.results ?? []) as { coupon_code: string; name: string; ok: boolean; reason?: string }[];
+    const okCount = results.filter((r) => r.ok).length;
+    const failed = results.filter((r) => !r.ok);
+
+    if (results.length === 0) {
+      setBulkLoginResult("Nenhum membro pendente de login — todo mundo já tem conta.");
+    } else {
+      setBulkLoginResult(
+        `${okCount} login(s) criado(s) com a senha "${password}".` +
+          (failed.length > 0 ? ` Falhou pra: ${failed.map((f) => `${f.coupon_code}${f.reason ? ` (${f.reason})` : ""}`).join(", ")}.` : ""),
+      );
+    }
+
+    setReloadTick((t) => t + 1);
+  }
+
   const [deletingSaleId, setDeletingSaleId] = useState<string | null>(null);
   const [deleteSaleError, setDeleteSaleError] = useState<string | null>(null);
 
@@ -975,6 +1017,49 @@ export function AdminDashboard() {
 
           <button type="button" className="mm-config-save-btn" disabled={addingManualSale} onClick={handleAddManualSale}>
             {addingManualSale ? "Registrando..." : "Registrar Venda"}
+          </button>
+        </div>
+      </section>
+
+      <section className="mm-table-section" style={{ marginBottom: 24 }}>
+        <h2 className="mm-section-title">Criar Login para Pendentes</h2>
+        <div className="mm-label" style={{ marginBottom: 16 }}>
+          Cria conta de login com a mesma senha temporária pra todo membro ativo que ainda não tem uma (útil depois de
+          importar cupons em massa).
+        </div>
+
+        {bulkLoginResult && (
+          <div className="mm-reset-banner">
+            {bulkLoginResult}
+            <button type="button" className="mm-link-btn" onClick={() => setBulkLoginResult(null)}>
+              Fechar
+            </button>
+          </div>
+        )}
+        {bulkLoginError && (
+          <div className="mm-reset-banner mm-reset-banner-error">
+            {bulkLoginError}
+            <button type="button" className="mm-link-btn" onClick={() => setBulkLoginError(null)}>
+              Fechar
+            </button>
+          </div>
+        )}
+
+        <div className="mm-config-grid">
+          <div className="mm-field">
+            <label className="mm-label" htmlFor="bulk-login-password">
+              Senha temporária
+            </label>
+            <input
+              id="bulk-login-password"
+              type="text"
+              value={bulkLoginPassword}
+              onChange={(e) => setBulkLoginPassword(e.target.value)}
+            />
+          </div>
+
+          <button type="button" className="mm-config-save-btn" disabled={creatingBulkLogins} onClick={handleBulkCreateLogins}>
+            {creatingBulkLogins ? "Criando..." : "Criar Logins Pendentes"}
           </button>
         </div>
       </section>
