@@ -33,6 +33,11 @@ Toda a lógica está isolada na função SQL `calculate_cycle_rewards` em
 [`schema.sql`](schema.sql) — é o único lugar que precisa mudar se a regra
 mudar de novo.
 
+O "valor vendido" usado pra calcular a comissão é `subtotal_price` do
+pedido Shopify — já vem com o desconto do cupom aplicado, mas **sem** frete
+e **sem** imposto (`gross_amount` em `sales`, ver
+[`supabase/functions/shopify-webhook/index.ts`](supabase/functions/shopify-webhook/index.ts)).
+
 ### Configurações editáveis pelo painel admin
 
 A seção **"Configurações"**, no final do painel admin, deixa editar direto

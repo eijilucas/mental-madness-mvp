@@ -61,6 +61,11 @@ interface ShopifyLineItem {
 
 interface ShopifyOrderPayload {
   id: number | string;
+  // subtotal_price = preço já com o desconto do cupom aplicado, mas ANTES
+  // de frete e imposto — é exatamente a base que a comissão usa. total_price
+  // (que inclui frete+imposto) não é usado pra isso, só fica disponível caso
+  // precise no futuro.
+  subtotal_price: string;
   total_price: string;
   created_at: string;
   discount_codes?: ShopifyDiscountCode[];
@@ -168,7 +173,7 @@ async function handleOrderPaid(order: ShopifyOrderPayload): Promise<Response> {
       member_id: member.id,
       shopify_order_id: String(order.id),
       coupon_code: couponCode,
-      gross_amount: Number(order.total_price),
+      gross_amount: Number(order.subtotal_price),
       sale_date: order.created_at ?? new Date().toISOString(),
     })
     .select("id")
