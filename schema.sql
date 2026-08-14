@@ -29,6 +29,12 @@ create table if not exists members (
   -- inferir só pelo formato do texto (CPF e telefone com DDD têm os dois 11
   -- dígitos), por isso precisa ser explícito.
   pix_key_type text check (pix_key_type in ('CPF', 'CNPJ', 'EMAIL', 'PHONE', 'EVP')),
+  -- ID do desconto na Shopify por loja (Basic / Exclusivos) — usado pra
+  -- sincronizar de volta (renomear/apagar) quando o membro é editado ou
+  -- excluído no painel. Nullable: membro pode ter cupom em só uma loja, ou
+  -- nenhuma sincronizada ainda.
+  shopify_discount_id_basic text,
+  shopify_discount_id_exclusivos text,
   created_at timestamptz not null default now()
 );
 
