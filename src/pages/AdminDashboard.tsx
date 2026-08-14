@@ -31,8 +31,16 @@ interface SaleWithMember extends Sale {
 }
 
 interface PendingPayout extends Cycle {
-  members: Pick<Member, "id" | "name" | "coupon_code" | "pix_key" | "is_admin">;
+  members: Pick<Member, "id" | "name" | "coupon_code" | "pix_key" | "pix_key_type" | "is_admin">;
 }
+
+const PIX_KEY_TYPES: { value: NonNullable<Member["pix_key_type"]>; label: string }[] = [
+  { value: "CPF", label: "CPF" },
+  { value: "CNPJ", label: "CNPJ" },
+  { value: "EMAIL", label: "E-mail" },
+  { value: "PHONE", label: "Telefone" },
+  { value: "EVP", label: "Aleatória" },
+];
 
 type SortKey = "name" | "coupon" | "sales" | "gross" | "pieces" | "commission";
 type SortDir = "asc" | "desc";
@@ -325,10 +333,10 @@ export function AdminDashboard() {
   }
 
   // --- Pagamento de comissão via PIX (dia 5) -------------------------------
-  // O crédito de R$5K fica no próprio app do Mercado Pago. O botão "Enviar
-  // PIX" chama a function pay-commission-pix, que usa a API de Payouts do
-  // Mercado Pago pra transferir de verdade — só marca commission_paid depois
-  // que o Mercado Pago confirma. Sem o Access Token configurado (ver
+  // O crédito de R$5K fica na conta do Asaas. O botão "Enviar PIX" chama a
+  // function pay-commission-pix, que usa a API de Transferências do Asaas
+  // pra transferir de verdade — só marca commission_paid depois que o Asaas
+  // confirma. Sem a API Key configurada (ver
   // supabase/functions/pay-commission-pix), a function recusa com erro
   // claro em vez de fingir que enviou.
   const [pendingPayouts, setPendingPayouts] = useState<PendingPayout[]>([]);
@@ -336,12 +344,13 @@ export function AdminDashboard() {
   const [payingAll, setPayingAll] = useState(false);
   const [payoutError, setPayoutError] = useState<string | null>(null);
   const [pixKeyDrafts, setPixKeyDrafts] = useState<Record<string, string>>({});
+  const [pixKeyTypeDrafts, setPixKeyTypeDrafts] = useState<Record<string, string>>({});
   const [savingPixKeyId, setSavingPixKeyId] = useState<string | null>(null);
 
   function loadPayments() {
     supabase
       .from("cycles")
-      .select("*, members!inner(id, name, coupon_code, pix_key, is_admin)")
+      .select("*, members!inner(id, name, coupon_code, pix_key, pix_key_type, is_admin)")
       .lt("cycle_month", currentCycleMonth())
       .gt("commission_amount", 0)
       .eq("commission_paid", false)
@@ -353,6 +362,13 @@ export function AdminDashboard() {
           const next = { ...prev };
           for (const p of payouts) {
             if (!(p.members.id in next)) next[p.members.id] = p.members.pix_key ?? "";
+          }
+          return next;
+        });
+        setPixKeyTypeDrafts((prev) => {
+          const next = { ...prev };
+          for (const p of payouts) {
+            if (!(p.members.id in next)) next[p.members.id] = p.members.pix_key_type ?? "";
           }
           return next;
         });
@@ -385,6 +401,13 @@ export function AdminDashboard() {
     setSavingPixKeyId(null);
   }
 
+  async function handlePixKeyTypeChange(memberId: string, value: string) {
+    setPixKeyTypeDrafts((prev) => ({ ...prev, [memberId]: value }));
+    setSavingPixKeyId(memberId);
+    await supabase.from("members").update({ pix_key_type: value || null }).eq("id", memberId);
+    setSavingPixKeyId(null);
+  }
+
   async function callPayCommissionPix(cycleIds: string[]): Promise<boolean> {
     const { data, error } = await supabase.functions.invoke("pay-commission-pix", {
       body: { cycle_ids: cycleIds },
@@ -409,8 +432,9 @@ export function AdminDashboard() {
     setPayoutError(null);
 
     const pixKey = (pixKeyDrafts[payout.members.id] ?? payout.members.pix_key ?? "").trim();
-    if (!pixKey) {
-      setPayoutError(`Cadastra a chave PIX de ${payout.members.name} antes de enviar.`);
+    const pixKeyType = (pixKeyTypeDrafts[payout.members.id] ?? payout.members.pix_key_type ?? "").trim();
+    if (!pixKey || !pixKeyType) {
+      setPayoutError(`Cadastra a chave PIX (e o tipo) de ${payout.members.name} antes de enviar.`);
       return;
     }
 
@@ -430,9 +454,13 @@ export function AdminDashboard() {
   async function handleSendPixAll() {
     setPayoutError(null);
 
-    const missingPixKey = pendingPayouts.find((p) => !(pixKeyDrafts[p.members.id] ?? p.members.pix_key ?? "").trim());
+    const missingPixKey = pendingPayouts.find(
+      (p) =>
+        !(pixKeyDrafts[p.members.id] ?? p.members.pix_key ?? "").trim() ||
+        !(pixKeyTypeDrafts[p.members.id] ?? p.members.pix_key_type ?? "").trim(),
+    );
     if (missingPixKey) {
-      setPayoutError(`Cadastra a chave PIX de ${missingPixKey.members.name} antes de enviar pra todos.`);
+      setPayoutError(`Cadastra a chave PIX (e o tipo) de ${missingPixKey.members.name} antes de enviar pra todos.`);
       return;
     }
 
@@ -666,6 +694,7 @@ export function AdminDashboard() {
                   <th>Mês</th>
                   <th>Comissão</th>
                   <th>Chave PIX</th>
+                  <th>Tipo</th>
                   <th></th>
                 </tr>
               </thead>
@@ -688,6 +717,21 @@ export function AdminDashboard() {
                         onBlur={() => handlePixKeyBlur(payout.members.id, payout.members.pix_key ?? "")}
                         disabled={savingPixKeyId === payout.members.id}
                       />
+                    </td>
+                    <td>
+                      <select
+                        className="mm-inline-edit-input"
+                        value={pixKeyTypeDrafts[payout.members.id] ?? ""}
+                        onChange={(e) => handlePixKeyTypeChange(payout.members.id, e.target.value)}
+                        disabled={savingPixKeyId === payout.members.id}
+                      >
+                        <option value="">Tipo</option>
+                        {PIX_KEY_TYPES.map((t) => (
+                          <option key={t.value} value={t.value}>
+                            {t.label}
+                          </option>
+                        ))}
+                      </select>
                     </td>
                     <td>
                       <button

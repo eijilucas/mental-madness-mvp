@@ -25,6 +25,10 @@ create table if not exists members (
   is_admin boolean not null default false,
   active boolean not null default true,
   pix_key text, -- chave PIX pra pagamento de comissão (dia 5) — nullable, admin preenche
+  -- tipo da chave (campo pixAddressKeyType da API do Asaas) — não dá pra
+  -- inferir só pelo formato do texto (CPF e telefone com DDD têm os dois 11
+  -- dígitos), por isso precisa ser explícito.
+  pix_key_type text check (pix_key_type in ('CPF', 'CNPJ', 'EMAIL', 'PHONE', 'EVP')),
   created_at timestamptz not null default now()
 );
 

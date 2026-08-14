@@ -140,39 +140,46 @@ adicionar, mas fica fora do escopo deste MVP.
 ## Pagamento de comissão via PIX (dia 5)
 
 Seção "Pagamento de Comissão (PIX)" no painel admin, logo abaixo do resumo
-do mês. O crédito (R$5K, valor decidido pelo Vitor) fica no próprio app do
-Mercado Pago — o painel não controla saldo nenhum, só mostra quanto cada
-membro tem a receber. Todo dia 5, o admin abre a seção, vê o **total
-pendente somado de todo mundo** e a lista de comissões pendentes (ciclos
-**já fechados**, ou seja `cycle_month` anterior ao mês atual, com
-`commission_amount > 0` e `commission_paid = false`), e clica em **"Enviar
-PIX"** — pede confirmação mostrando nome e valor de quem vai receber antes
-de disparar (um por um, ou "Enviar PIX para todos" pra mandar tudo de uma
+do mês. O crédito (R$5K, valor decidido pelo Vitor) fica na conta do Asaas
+— o painel não controla saldo nenhum, só mostra quanto cada membro tem a
+receber. Todo dia 5, o admin abre a seção, vê o **total pendente somado de
+todo mundo** e a lista de comissões pendentes (ciclos **já fechados**, ou
+seja `cycle_month` anterior ao mês atual, com `commission_amount > 0` e
+`commission_paid = false`), e clica em **"Enviar PIX"** — pede pra digitar
+"ENVIAR" pra confirmar, mostrando nome e valor de quem vai receber antes de
+disparar (um por um, ou "Enviar PIX para todos" pra mandar tudo de uma
 vez).
 
-O botão chama de verdade a **API de Payouts do Mercado Pago**
-(`POST /v1/transaction-intents/process`) — só marca
-`cycles.commission_paid = true` depois que o Mercado Pago confirma a
-transferência (ver
+O botão chama de verdade a **API de Transferências do Asaas**
+(`POST /v3/transfers`) — só marca `cycles.commission_paid = true` depois
+que o Asaas aceita a transferência (ver
 [`supabase/functions/pay-commission-pix/index.ts`](supabase/functions/pay-commission-pix/index.ts)).
-Exige a **chave PIX** do membro cadastrada antes (campo editável direto na
-tabela de pendências, salva sozinho ao sair do campo).
+Exige **chave PIX + tipo da chave** do membro cadastrados antes (campos
+editáveis direto na tabela de pendências, salvam sozinhos).
+
+> **Por que Asaas e não Mercado Pago?** A API de Payouts (money-out) do
+> Mercado Pago existe, mas precisa de uma aplicação separada aprovada +
+> assinatura de requisição por par de chaves pública/privada — não
+> apareceu disponível pra conta testada, e não achamos a tela de
+> configuração ("Configure money transfers") nem no painel de
+> desenvolvedores. O Asaas libera transferência via chave PIX numa API bem
+> mais simples (só uma API key no header).
 
 **Falta só o secret pra ligar de verdade:**
 ```bash
-npx supabase secrets set MERCADOPAGO_ACCESS_TOKEN=<access token do Vitor> --project-ref tflxotunokypiakkdyxs
+npx supabase secrets set ASAAS_API_KEY=<api key do Vitor> --project-ref tflxotunokypiakkdyxs
 ```
-Sem esse secret, a function recusa com erro claro ("Token do Mercado Pago
-ainda não configurado") em vez de fingir que enviou. **Importante:** não
-consegui confirmar 100% o formato exato do body da requisição contra a
-documentação (a página de referência detalhada não abriu na hora que
-pesquisei) — antes de confiar de olhos fechados, testa com um PIX de valor
-baixo primeiro (idealmente com credencial de teste do Mercado Pago) e
-ajusta `buildPayoutBody` na function se o formato vier diferente.
+Pega em **Configurações → Integrações → API Key** no painel do Asaas. Sem
+esse secret, a function recusa com erro claro ("API Key do Asaas ainda não
+configurada") em vez de fingir que enviou. A function detecta sozinha se é
+chave de sandbox (`$aact_hmlg_...`) ou produção (`$aact_prod_...`) e usa a
+URL certa — **testa com a chave de sandbox primeiro**.
 
-Colunas novas: `pix_key` em `members` e
-`commission_paid`/`commission_paid_at` em `cycles` — sem tabela nova, RLS
-já coberta pelas policies existentes dessas duas tabelas.
+Colunas novas: `pix_key` e `pix_key_type` em `members` (tipo é obrigatório
+pra API do Asaas — CPF e telefone com DDD têm os dois 11 dígitos, não dá
+pra inferir só pelo texto) e `commission_paid`/`commission_paid_at` em
+`cycles` — sem tabela nova, RLS já coberta pelas policies existentes
+dessas duas tabelas.
 
 ## Configurar o `.env`
 

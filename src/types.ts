@@ -7,6 +7,7 @@ export interface Member {
   is_admin: boolean;
   active: boolean;
   pix_key: string | null;
+  pix_key_type: "CPF" | "CNPJ" | "EMAIL" | "PHONE" | "EVP" | null;
   created_at: string;
 }
 

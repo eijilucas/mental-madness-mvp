@@ -2,23 +2,21 @@
 // Edge Function: pay-commission-pix
 // Chamada pelo botão "Enviar PIX" / "Enviar PIX para todos" no painel admin
 // (seção "Pagamento de Comissão"). Pra cada ciclo pendente informado: chama
-// a API de Payouts do Mercado Pago (POST /v1/transaction-intents/process)
-// mandando o valor da comissão pra chave PIX do membro, e só marca
-// cycles.commission_paid = true se a transferência foi aceita.
+// a API de Transferências do Asaas (POST /v3/transfers) mandando o valor da
+// comissão pra chave PIX do membro, e só marca cycles.commission_paid =
+// true se a transferência foi aceita.
 //
-// IMPORTANTE — ainda não testado contra a API real:
-//   O endpoint e a autenticação (Access Token no header) foram confirmados
-//   na documentação oficial (Payouts), mas não consegui confirmar 100% o
-//   formato exato do body (a página de referência detalhada não abriu).
-//   Antes de usar de verdade: testa com UM PIX de valor baixo primeiro,
-//   de preferência com credencial de teste do Mercado Pago, e ajusta o
-//   `buildPayoutBody` abaixo se o formato vier diferente do esperado.
+// Trocamos o Mercado Pago pelo Asaas: a API de Payouts do MP precisa de uma
+// aplicação separada aprovada + assinatura por par de chaves
+// pública/privada, que não apareceu disponível na conta. O Asaas libera
+// transferência via chave PIX numa API bem mais simples, com só uma API key.
 //
-// Deploy (roda você/o Vitor, precisa de `supabase login` primeiro):
+// Deploy:
 //   npx supabase functions deploy pay-commission-pix --project-ref tflxotunokypiakkdyxs
 //
-// Secret necessário (o Vitor gera no painel de devs do Mercado Pago):
-//   npx supabase secrets set MERCADOPAGO_ACCESS_TOKEN=xxxxx --project-ref tflxotunokypiakkdyxs
+// Secret necessário (o Vitor pega em Configurações > Integrações > API Key,
+// no painel do Asaas — sandbox ou produção, ver detecção automática abaixo):
+//   npx supabase secrets set ASAAS_API_KEY=xxxxx --project-ref tflxotunokypiakkdyxs
 // ============================================================================
 
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -27,15 +25,20 @@ import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-const MERCADOPAGO_ACCESS_TOKEN = Deno.env.get("MERCADOPAGO_ACCESS_TOKEN") ?? "";
+const ASAAS_API_KEY = Deno.env.get("ASAAS_API_KEY") ?? "";
 
-const MP_PAYOUTS_URL = "https://api.mercadopago.com/v1/transaction-intents/process";
+// Chave de sandbox começa com "$aact_hmlg_", produção com "$aact_prod_" —
+// detecta sozinho pra evitar mandar PIX de teste pra API de produção (ou
+// vice-versa) por engano de configuração.
+const ASAAS_BASE_URL = ASAAS_API_KEY.startsWith("$aact_hmlg_")
+  ? "https://api-sandbox.asaas.com/v3"
+  : "https://api.asaas.com/v3";
 
 interface PayoutTarget {
   cycleId: string;
-  memberId: string;
   memberName: string;
   pixKey: string;
+  pixKeyType: string;
   amount: number;
 }
 
@@ -46,40 +49,38 @@ interface PayoutResult {
   reason?: string;
 }
 
-function buildPayoutBody(target: PayoutTarget) {
-  // Formato assumido a partir da documentação de Payouts — confirmar contra
-  // a API real na primeira transferência de teste (ver aviso no topo).
-  return {
-    origin: { account_id: "me" },
-    destination: { type: "pix", pix_key: target.pixKey },
-    amount: { value: target.amount, currency: "BRL" },
-    external_reference: `commission-${target.cycleId}`,
-    description: `Comissão Mental Madness — ${target.memberName}`,
-  };
-}
-
 async function sendPayout(target: PayoutTarget): Promise<PayoutResult> {
   try {
-    const res = await fetch(MP_PAYOUTS_URL, {
+    const res = await fetch(`${ASAAS_BASE_URL}/transfers`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${MERCADOPAGO_ACCESS_TOKEN}`,
+        access_token: ASAAS_API_KEY,
         "Content-Type": "application/json",
-        "X-Idempotency-Key": `commission-${target.cycleId}`,
       },
-      body: JSON.stringify(buildPayoutBody(target)),
+      body: JSON.stringify({
+        value: target.amount,
+        pixAddressKey: target.pixKey,
+        pixAddressKeyType: target.pixKeyType,
+        operationType: "PIX",
+        description: `Comissão Mental Madness — ${target.memberName}`,
+        externalReference: `commission-${target.cycleId}`,
+      }),
     });
 
+    const resBody = await res.json().catch(() => null);
+
     if (!res.ok) {
-      const errBody = await res.text();
-      console.error(`Payout falhou pra ${target.memberName}:`, res.status, errBody);
-      return { cycleId: target.cycleId, memberName: target.memberName, ok: false, reason: `Mercado Pago recusou (${res.status})` };
+      console.error(`Payout falhou pra ${target.memberName}:`, res.status, resBody);
+      const reason = resBody?.errors?.[0]?.description ?? `Asaas recusou (${res.status})`;
+      return { cycleId: target.cycleId, memberName: target.memberName, ok: false, reason };
     }
 
+    // status vem PENDING na hora — o Asaas processa async e confirma depois
+    // via webhook (ver README), mas já aceitou a ordem de transferência.
     return { cycleId: target.cycleId, memberName: target.memberName, ok: true };
   } catch (err) {
     console.error(`Erro de rede no payout pra ${target.memberName}:`, err);
-    return { cycleId: target.cycleId, memberName: target.memberName, ok: false, reason: "Erro de rede ao chamar o Mercado Pago" };
+    return { cycleId: target.cycleId, memberName: target.memberName, ok: false, reason: "Erro de rede ao chamar o Asaas" };
   }
 }
 
@@ -92,8 +93,8 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }
 
-  if (!MERCADOPAGO_ACCESS_TOKEN) {
-    return jsonResponse({ error: "Token do Mercado Pago ainda não configurado — peça pro Vitor gerar o Access Token." }, 400);
+  if (!ASAAS_API_KEY) {
+    return jsonResponse({ error: "API Key do Asaas ainda não configurada — peça pro Vitor gerar a chave." }, 400);
   }
 
   const authHeader = req.headers.get("authorization") ?? "";
@@ -136,7 +137,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: cycles, error: cyclesError } = await adminClient
     .from("cycles")
-    .select("id, commission_amount, commission_paid, members(id, name, pix_key)")
+    .select("id, commission_amount, commission_paid, members(id, name, pix_key, pix_key_type)")
     .in("id", body.cycle_ids);
 
   if (cyclesError || !cycles) {
@@ -150,18 +151,18 @@ Deno.serve(async (req: Request) => {
     id: string;
     commission_amount: number;
     commission_paid: boolean;
-    members: { id: string; name: string; pix_key: string | null };
+    members: { id: string; name: string; pix_key: string | null; pix_key_type: string | null };
   }>) {
     if (c.commission_paid) continue;
-    if (!c.members.pix_key) {
-      skipped.push({ cycleId: c.id, memberName: c.members.name, ok: false, reason: "Sem chave PIX cadastrada" });
+    if (!c.members.pix_key || !c.members.pix_key_type) {
+      skipped.push({ cycleId: c.id, memberName: c.members.name, ok: false, reason: "Sem chave PIX (ou tipo) cadastrada" });
       continue;
     }
     targets.push({
       cycleId: c.id,
-      memberId: c.members.id,
       memberName: c.members.name,
       pixKey: c.members.pix_key,
+      pixKeyType: c.members.pix_key_type,
       amount: c.commission_amount,
     });
   }
