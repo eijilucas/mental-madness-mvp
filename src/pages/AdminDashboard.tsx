@@ -4,7 +4,7 @@ import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { currentCycleMonth, formatCycleMonthLabel, nextCycleMonth } from "../lib/date";
 import { SYNTHETIC_LOGIN_DOMAIN } from "../lib/auth";
-import { extractFunctionErrorMessage } from "../lib/functions";
+import { extractFunctionErrorMessage, invokeAdminFunction } from "../lib/functions";
 import { Header } from "../components/Header";
 import { StatCard } from "../components/StatCard";
 import { MonthSelector } from "../components/MonthSelector";
@@ -125,8 +125,8 @@ export function AdminDashboard() {
     }
 
     // Já cria o login na hora, sem precisar rodar script pelo terminal.
-    const { data: loginData, error: loginError } = await supabase.functions.invoke("create-member-login", {
-      body: { member_id: created.id },
+    const { data: loginData, error: loginError } = await invokeAdminFunction("create-member-login", {
+      member_id: created.id,
     });
     setAddingMember(false);
 
@@ -247,9 +247,7 @@ export function AdminDashboard() {
     setResetResult(null);
     setResettingId(memberId);
 
-    const { data, error } = await supabase.functions.invoke("reset-member-password", {
-      body: { member_id: memberId },
-    });
+    const { data, error } = await invokeAdminFunction("reset-member-password", { member_id: memberId });
 
     setResettingId(null);
 
@@ -268,9 +266,7 @@ export function AdminDashboard() {
     setResetResult(null);
     setCreatingLoginId(memberId);
 
-    const { data, error } = await supabase.functions.invoke("create-member-login", {
-      body: { member_id: memberId },
-    });
+    const { data, error } = await invokeAdminFunction("create-member-login", { member_id: memberId });
 
     setCreatingLoginId(null);
 
@@ -295,9 +291,7 @@ export function AdminDashboard() {
     }
 
     setDeletingId(row.id);
-    const { data, error } = await supabase.functions.invoke("delete-member", {
-      body: { member_id: row.id },
-    });
+    const { data, error } = await invokeAdminFunction("delete-member", { member_id: row.id });
     setDeletingId(null);
 
     if (error || data?.error) {
@@ -331,8 +325,10 @@ export function AdminDashboard() {
     }
 
     setAddingManualSale(true);
-    const { data, error } = await supabase.functions.invoke("add-manual-sale", {
-      body: { member_id: manualSaleMemberId, gross_amount: amount, product_name: manualSaleProduct.trim() || undefined },
+    const { data, error } = await invokeAdminFunction("add-manual-sale", {
+      member_id: manualSaleMemberId,
+      gross_amount: amount,
+      product_name: manualSaleProduct.trim() || undefined,
     });
     setAddingManualSale(false);
 
@@ -365,9 +361,7 @@ export function AdminDashboard() {
     }
 
     setCreatingBulkLogins(true);
-    const { data, error } = await supabase.functions.invoke("bulk-create-logins", {
-      body: { temp_password: password },
-    });
+    const { data, error } = await invokeAdminFunction("bulk-create-logins", { temp_password: password });
     setCreatingBulkLogins(false);
 
     if (error || data?.error) {
@@ -402,9 +396,7 @@ export function AdminDashboard() {
 
     setDeleteSaleError(null);
     setDeletingSaleId(sale.id);
-    const { data, error } = await supabase.functions.invoke("delete-sale", {
-      body: { sale_id: sale.id },
-    });
+    const { data, error } = await invokeAdminFunction("delete-sale", { sale_id: sale.id });
     setDeletingSaleId(null);
 
     if (error || data?.error) {
@@ -531,9 +523,7 @@ export function AdminDashboard() {
   }
 
   async function callPayCommissionPix(cycleIds: string[]): Promise<boolean> {
-    const { data, error } = await supabase.functions.invoke("pay-commission-pix", {
-      body: { cycle_ids: cycleIds },
-    });
+    const { data, error } = await invokeAdminFunction("pay-commission-pix", { cycle_ids: cycleIds });
 
     if (error || data?.error) {
       setPayoutError((await extractFunctionErrorMessage(error, data)) ?? "Não deu pra enviar o PIX. Tenta de novo.");
