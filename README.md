@@ -139,6 +139,15 @@ adicionar, mas fica fora do escopo deste MVP.
   antes de confirmar. Apagar o login junto é importante: antes disso, apagar
   só a linha de `members` deixava a conta de Auth órfã, e recriar o membro
   com o mesmo cupom/e-mail depois falhava com "already registered".
+- **Adicionar venda manual (WhatsApp)**: caixa "Adicionar Venda Manual
+  (WhatsApp)" no painel admin, pra pedido fechado fora da Shopify — escolhe
+  o membro, digita o valor (produto é opcional, só texto livre) e clica em
+  "Registrar Venda". Chama a function `add-manual-sale` (só admin, RLS de
+  `sales` não permite insert direto do client) que insere em `sales` com
+  `source = 'manual'` — entra no cálculo do ciclo/comissão do mês
+  normalmente, igual uma venda vinda do webhook (`source = 'shopify'`). Na
+  tabela "Vendas do Mês" essas linhas aparecem com uma tag "WhatsApp" pra
+  diferenciar.
 - **Desativar sem apagar** (`active = false`) não tem mais botão na UI, mas
   o mecanismo continua existindo — quem preferir manter o histórico e só
   tirar o membro da lista principal pode fazer via SQL/Table Editor:

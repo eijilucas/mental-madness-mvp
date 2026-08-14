@@ -27,6 +27,7 @@ export interface Sale {
   gross_amount: number;
   net_amount: number | null;
   sale_date: string;
+  source: "shopify" | "manual";
   created_at: string;
   sale_items?: SaleItem[];
 }

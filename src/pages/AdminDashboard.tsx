@@ -309,6 +309,46 @@ export function AdminDashboard() {
     setReloadTick((t) => t + 1);
   }
 
+  const [manualSaleMemberId, setManualSaleMemberId] = useState("");
+  const [manualSaleAmount, setManualSaleAmount] = useState("");
+  const [manualSaleProduct, setManualSaleProduct] = useState("");
+  const [addingManualSale, setAddingManualSale] = useState(false);
+  const [manualSaleError, setManualSaleError] = useState<string | null>(null);
+  const [manualSaleSuccess, setManualSaleSuccess] = useState<string | null>(null);
+
+  async function handleAddManualSale() {
+    setManualSaleError(null);
+    setManualSaleSuccess(null);
+
+    const amount = Number(manualSaleAmount.replace(",", "."));
+    if (!manualSaleMemberId) {
+      setManualSaleError("Escolhe o membro.");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setManualSaleError("Valor precisa ser maior que zero.");
+      return;
+    }
+
+    setAddingManualSale(true);
+    const { data, error } = await supabase.functions.invoke("add-manual-sale", {
+      body: { member_id: manualSaleMemberId, gross_amount: amount, product_name: manualSaleProduct.trim() || undefined },
+    });
+    setAddingManualSale(false);
+
+    if (error || data?.error) {
+      setManualSaleError((await extractFunctionErrorMessage(error, data)) ?? "Não deu pra registrar a venda. Tenta de novo.");
+      return;
+    }
+
+    const memberName = rows.find((r) => r.id === manualSaleMemberId)?.name ?? "membro";
+    setManualSaleSuccess(`Venda de ${currencyFormatter.format(amount)} registrada pra ${memberName}.`);
+    setManualSaleMemberId("");
+    setManualSaleAmount("");
+    setManualSaleProduct("");
+    setReloadTick((t) => t + 1);
+  }
+
   const [reactivatingId, setReactivatingId] = useState<string | null>(null);
 
   async function handleReactivateMember(id: string) {
@@ -841,6 +881,80 @@ export function AdminDashboard() {
         </div>
       </section>
 
+      <section className="mm-table-section" style={{ marginBottom: 24 }}>
+        <h2 className="mm-section-title">Adicionar Venda Manual (WhatsApp)</h2>
+        <div className="mm-label" style={{ marginBottom: 16 }}>
+          Pra pedido fechado fora da Shopify. Entra no ciclo do mês igual a uma venda normal.
+        </div>
+
+        {manualSaleSuccess && (
+          <div className="mm-reset-banner">
+            {manualSaleSuccess}
+            <button type="button" className="mm-link-btn" onClick={() => setManualSaleSuccess(null)}>
+              Fechar
+            </button>
+          </div>
+        )}
+        {manualSaleError && (
+          <div className="mm-reset-banner mm-reset-banner-error">
+            {manualSaleError}
+            <button type="button" className="mm-link-btn" onClick={() => setManualSaleError(null)}>
+              Fechar
+            </button>
+          </div>
+        )}
+
+        <div className="mm-config-grid">
+          <div className="mm-field">
+            <label className="mm-label" htmlFor="manual-sale-member">
+              Membro
+            </label>
+            <select
+              id="manual-sale-member"
+              value={manualSaleMemberId}
+              onChange={(e) => setManualSaleMemberId(e.target.value)}
+            >
+              <option value="">Selecione...</option>
+              {rows.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name} ({row.coupon_code})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="mm-field">
+            <label className="mm-label" htmlFor="manual-sale-amount">
+              Valor (R$)
+            </label>
+            <input
+              id="manual-sale-amount"
+              type="text"
+              inputMode="decimal"
+              placeholder="0,00"
+              value={manualSaleAmount}
+              onChange={(e) => setManualSaleAmount(e.target.value)}
+            />
+          </div>
+
+          <div className="mm-field">
+            <label className="mm-label" htmlFor="manual-sale-product">
+              Produto (opcional)
+            </label>
+            <input
+              id="manual-sale-product"
+              type="text"
+              value={manualSaleProduct}
+              onChange={(e) => setManualSaleProduct(e.target.value)}
+            />
+          </div>
+
+          <button type="button" className="mm-config-save-btn" disabled={addingManualSale} onClick={handleAddManualSale}>
+            {addingManualSale ? "Registrando..." : "Registrar Venda"}
+          </button>
+        </div>
+      </section>
+
       <section className="mm-table-section">
         <div className="mm-section-header" style={{ marginBottom: 16 }}>
           <h2 className="mm-section-title" style={{ marginBottom: 0 }}>
@@ -1121,7 +1235,14 @@ export function AdminDashboard() {
                     <span className="mm-member-row-name">{sale.members?.name ?? "—"}</span>{" "}
                     <span className="mm-member-row-coupon">{sale.members?.coupon_code}</span>
                   </td>
-                  <td>{productsLabel(sale)}</td>
+                  <td>
+                    {productsLabel(sale)}
+                    {sale.source === "manual" && (
+                      <span className="mm-tier-badge" style={{ marginLeft: 8 }}>
+                        WhatsApp
+                      </span>
+                    )}
+                  </td>
                   <td>{dateFormatter.format(new Date(sale.sale_date))}</td>
                   <td className="mm-cell-amount">{currencyFormatter.format(sale.gross_amount)}</td>
                 </tr>

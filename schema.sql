@@ -49,6 +49,9 @@ create table if not exists sales (
   gross_amount numeric(12,2) not null check (gross_amount >= 0),
   net_amount numeric(12,2), -- reservado para quando a comissão puder passar a ser sobre valor líquido
   sale_date timestamptz not null default now(),
+  -- 'shopify' = veio do webhook, 'manual' = admin lançou (pedido fechado por
+  -- WhatsApp, fora da Shopify).
+  source text not null default 'shopify' check (source in ('shopify', 'manual')),
   created_at timestamptz not null default now()
 );
 
