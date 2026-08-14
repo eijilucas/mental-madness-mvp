@@ -641,11 +641,6 @@ export function AdminDashboard() {
 
       <section className="mm-table-section" style={{ marginBottom: 24 }}>
         <h2 className="mm-section-title">Pagamento de Comissão (PIX)</h2>
-        <div className="mm-label" style={{ marginBottom: 16 }}>
-          Dia 5, confere quanto cada um tem a receber (meses já fechados) e clica em "Enviar PIX" — o valor sai
-          direto do crédito no Mercado Pago pra chave PIX do membro. Só marca como pago depois que o Mercado Pago
-          confirma o envio.
-        </div>
 
         {payoutError && (
           <div className="mm-reset-banner mm-reset-banner-error">
