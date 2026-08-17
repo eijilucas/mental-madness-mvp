@@ -701,6 +701,17 @@ export function AdminDashboard() {
   const totalPieces = rows.reduce((sum, r) => sum + (r.cycle?.pieces_earned ?? 0), 0);
   const totalCommission = rows.reduce((sum, r) => sum + (r.cycle?.commission_amount ?? 0), 0);
 
+  // Ranking ao vivo do ciclo em andamento (mês atual, ainda não fechou pra
+  // pagamento) — separado da lista de pendentes abaixo, que só mostra mês
+  // já encerrado. Só faz sentido mostrar quando o seletor de mês tá no mês
+  // corrente (senão "ciclo atual" seria enganoso).
+  const currentMonthEarners =
+    selectedMonth === currentCycleMonth()
+      ? rows
+          .filter((r) => (r.cycle?.commission_amount ?? 0) > 0)
+          .sort((a, b) => (b.cycle?.commission_amount ?? 0) - (a.cycle?.commission_amount ?? 0))
+      : [];
+
   return (
     <div className="mm-app-frame">
       <Header
@@ -806,6 +817,46 @@ export function AdminDashboard() {
             ? ` — enviar as ${pendingPayouts.length} pendentes agora passaria do limite e custaria ~${currencyFormatter.format(extraTransferFees)} em taxa do Asaas (R$2 por transferência extra).`
             : "."}
         </div>
+
+        {selectedMonth === currentCycleMonth() && (
+          <div style={{ marginBottom: 24 }}>
+            <h3 style={{ margin: "0 0 4px", fontSize: 13, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-label)" }}>
+              Comissão do Ciclo Atual (em andamento)
+            </h3>
+            <div className="mm-label" style={{ marginBottom: 12 }}>
+              Ainda não fechou pra pagamento (fecha dia 1) — atualiza ao vivo conforme cada afiliado vende.
+            </div>
+            {currentMonthEarners.length === 0 ? (
+              <div className="mm-empty-state">Ninguém bateu comissão neste ciclo ainda.</div>
+            ) : (
+              <table className="mm-table">
+                <thead>
+                  <tr>
+                    <th>Membro</th>
+                    <th>Vendas</th>
+                    <th>Comissão</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {currentMonthEarners.map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        <span className="mm-member-row-name">{row.name}</span>{" "}
+                        <span className="mm-member-row-coupon">{row.coupon_code}</span>
+                      </td>
+                      <td>{row.cycle?.sales_count ?? 0}</td>
+                      <td className="mm-cell-amount">{currencyFormatter.format(row.cycle?.commission_amount ?? 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+
+        <h3 style={{ margin: "0 0 12px", fontSize: 13, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-label)" }}>
+          Pronto pra Pagar (meses fechados)
+        </h3>
 
         {pendingPayouts.length === 0 ? (
           <div className="mm-empty-state">Nenhuma comissão pendente de pagamento.</div>
