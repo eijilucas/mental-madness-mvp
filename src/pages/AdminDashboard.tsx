@@ -49,7 +49,7 @@ const SORT_LABEL: Record<SortKey, string> = {
   name: "Membro",
   coupon: "Cupom",
   sales: "Vendas",
-  gross: "Bruto Vendido",
+  gross: "Valor Líquido Vendido",
   pieces: "Peças",
   commission: "Comissão",
 };
@@ -790,7 +790,7 @@ export function AdminDashboard() {
 
       <div className="mm-admin-summary-grid">
         <StatCard label="Vendas do Mês" value={String(totalSales)} />
-        <StatCard label="Valor Bruto Vendido" value={currencyFormatter.format(totalGross)} />
+        <StatCard label="Valor Líquido Vendido" value={currencyFormatter.format(totalGross)} />
         <StatCard label="Peças a Entregar" value={String(totalPieces)} accent />
         <StatCard label="Comissões do Mês" value={currencyFormatter.format(totalCommission)} accent />
       </div>
