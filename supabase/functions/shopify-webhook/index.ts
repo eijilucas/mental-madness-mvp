@@ -87,10 +87,10 @@ interface ShopifyRefundPayload {
   order_id: number | string;
 }
 
-function randomTempPassword(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(6));
-  return "mm-" + btoa(String.fromCharCode(...bytes)).replace(/[^a-zA-Z0-9]/g, "").slice(0, 8);
-}
+// Mesma senha temporária padrão usada em scripts/create-member-logins.mjs e
+// no botão "Criar Login para Pendentes" do painel -- todo membro novo entra
+// com essa senha (é forçado a trocar no primeiro login).
+const DEFAULT_TEMP_PASSWORD = "mentalmadness2026";
 
 // A Shopify manda formatos diferentes dependendo de qual API cria o
 // desconto — tenta os caminhos mais comuns, do mais novo pro mais legado.
@@ -292,7 +292,7 @@ async function handleDiscountCreated(payload: Record<string, unknown>): Promise<
     return jsonResponse({ error: "Erro interno ao criar membro" }, 500);
   }
 
-  const tempPassword = randomTempPassword();
+  const tempPassword = DEFAULT_TEMP_PASSWORD;
   const { data: created, error: createAuthError } = await supabase.auth.admin.createUser({
     email,
     password: tempPassword,

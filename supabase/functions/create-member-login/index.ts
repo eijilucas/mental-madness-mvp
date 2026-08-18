@@ -18,10 +18,10 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 
-function randomTempPassword(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(6));
-  return "mm-" + btoa(String.fromCharCode(...bytes)).replace(/[^a-zA-Z0-9]/g, "").slice(0, 8);
-}
+// Mesma senha temporária padrão usada em scripts/create-member-logins.mjs e
+// no botão "Criar Login para Pendentes" do painel -- todo membro novo entra
+// com essa senha (é forçado a trocar no primeiro login).
+const DEFAULT_TEMP_PASSWORD = "mentalmadness2026";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -88,7 +88,7 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Esse membro não tem e-mail cadastrado" }, 400);
   }
 
-  const tempPassword = randomTempPassword();
+  const tempPassword = DEFAULT_TEMP_PASSWORD;
 
   const { data: created, error: createError } = await adminClient.auth.admin.createUser({
     email: targetMember.email,
