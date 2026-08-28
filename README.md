@@ -374,6 +374,9 @@ sem nenhuma credencial real configurada. Quando for ativar:
      automaticamente quando um cupom novo é criado (se essa opção não
      aparecer na sua loja, procure `Discount code creation`
      (`discount_codes/create`), formato legado que a function também entende)
+   - Event: `Collection creation` (`collections/create`) → adiciona a
+     coleção nova automaticamente em todo cupom de afiliado já sincronizado
+     naquela loja (ver seção "Sincronização de mão dupla" abaixo)
    - Format: `JSON`
    - URL: `https://tflxotunokypiakkdyxs.supabase.co/functions/v1/shopify-webhook`
 4. Copie o "Signing secret" gerado pela Shopify (é o mesmo pra todos os
@@ -389,6 +392,74 @@ sem nenhuma credencial real configurada. Quando for ativar:
 > painel admin (ou `node scripts/create-member-logins.mjs` pelo terminal)
 > pra criar o login de todo mundo que entrou sem conta, todos com a mesma
 > senha temporária.
+
+## Sincronização de mão dupla com a Shopify (cupom + coleção)
+
+Diferente do webhook acima (só recebe evento DA Shopify), essa parte
+**escreve** na Shopify a partir de ações no painel admin:
+
+- **Membro novo**: a caixa "Adicionar Membro" tem checkboxes "Basic" /
+  "Exclusivos" — marcando uma ou as duas, cria o cupom (5%) direto na(s)
+  loja(s) escolhida(s), clonando a lista de coleções do desconto mais
+  recente daquela loja (todo cupom de afiliado compartilha as mesmas
+  coleções, mantidas em sincronia pela automação de coleção nova abaixo).
+- **Editar cupom**: renomeando o código de um membro (ícone de lápis na
+  tabela), o mesmo desconto é renomeado na Shopify (não cria um novo) —
+  mantém o histórico de uso do cupom.
+- **Excluir membro**: apaga o cupom nas lojas onde ele existir, antes de
+  apagar o membro. Falha na Shopify não trava a exclusão (o admin já
+  confirmou digitando o cupom) — só mostra um aviso pra limpar manualmente
+  se precisar.
+- **Coleção nova** (`collections/create`, webhook acima): toda coleção
+  criada em qualquer uma das duas lojas entra automaticamente na lista de
+  coleções elegíveis de **todo** cupom de afiliado já sincronizado naquela
+  loja — sem exceção, sem precisar adicionar cupom por cupom na mão.
+
+### Autenticação (client credentials grant)
+
+A Shopify descontinuou token estático de app pra apps criados a partir de
+01/01/2026. Em vez de um `shpat_...` fixo, cada chamada troca
+`client_id` + `client_secret` por um token temporário (válido 24h) via
+`POST https://{loja}.myshopify.com/admin/oauth/access_token` — ver
+[`supabase/functions/_shared/shopify.ts`](supabase/functions/_shared/shopify.ts).
+
+Setup (uma vez, em **cada uma** das duas lojas):
+
+1. Shopify Admin → **Configurações → Apps e canais de vendas → Desenvolver
+   apps** → Criar um app
+2. Escopos da API Admin: marcar `read_discounts`, `write_discounts` e
+   `read_products` (coleção fica sob o escopo de Produtos na Shopify, não
+   tem escopo próprio — só é usado pra ler/gravar a lista de coleções de um
+   desconto, nunca mexe em produto)
+3. Instalar app → aba "Credenciais da API" → copiar `Client ID` e
+   `Secret Key` (`shpss_...`)
+4. Configurar os secrets (troque `basic`/`exclusivos` pelas lojas reais):
+   ```bash
+   npx supabase secrets set \
+     SHOPIFY_STORE_DOMAIN_BASIC=xxxxx.myshopify.com \
+     SHOPIFY_CLIENT_ID_BASIC=xxxxx \
+     SHOPIFY_CLIENT_SECRET_BASIC=shpss_xxxxx \
+     SHOPIFY_STORE_DOMAIN_EXCLUSIVOS=xxxxx.myshopify.com \
+     SHOPIFY_CLIENT_ID_EXCLUSIVOS=xxxxx \
+     SHOPIFY_CLIENT_SECRET_EXCLUSIVOS=shpss_xxxxx \
+     --project-ref tflxotunokypiakkdyxs
+   ```
+5. Deploy: `npx supabase functions deploy shopify-sync-coupon` e
+   `npx supabase functions deploy delete-member` (ambas usam o mesmo
+   cliente compartilhado)
+
+> **Atenção**: mudar o escopo de um app já instalado é conhecido por não
+> sincronizar de verdade mesmo depois de reinstalar (bug reportado várias
+> vezes em 2026 nos fóruns da Shopify). Se precisar adicionar escopo
+> depois, o caminho confiável é criar um app novo já com todos os escopos
+> marcados, em vez de editar o existente.
+
+`members.shopify_discount_id_basic` / `shopify_discount_id_exclusivos`
+guardam o ID (`gid://shopify/DiscountCodeNode/...`) do desconto em cada
+loja — é isso que permite renomear/apagar/adicionar coleção depois. Pra
+membros que já existiam antes dessa feature, rodou um backfill único
+(buscou por `title` via GraphQL e casou pelo cupom) — ver
+[`20260814000012_backfill_shopify_discount_ids.sql`](supabase/migrations/20260814000012_backfill_shopify_discount_ids.sql).
 
 A function identifica o cupom em `discount_codes[0].code` (ou
 `discount_applications` como fallback), busca o membro dono do cupom
