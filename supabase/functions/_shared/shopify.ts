@@ -1,0 +1,236 @@
+// ============================================================================
+// Cliente compartilhado da Admin API da Shopify (GraphQL), usado pelo sync de
+// mão dupla (criar/renomear/excluir cupom) e pela automação de coleção nova.
+//
+// Autenticação: client credentials grant (OAuth2) -- a Shopify descontinuou
+// token estático pra app novo a partir de 01/01/2026. Em vez de guardar um
+// token fixo, cada chamada busca um token novo (válido 24h) trocando
+// client_id + client_secret. Ver:
+// https://shopify.dev/docs/apps/build/authentication-authorization/client-credentials-grant
+//
+// Secrets esperados (por loja, "BASIC" ou "EXCLUSIVOS"):
+//   SHOPIFY_STORE_DOMAIN_<LOJA>   ex: m3ntalmadness.myshopify.com
+//   SHOPIFY_CLIENT_ID_<LOJA>
+//   SHOPIFY_CLIENT_SECRET_<LOJA>
+// Escopos necessários no app: read_discounts, write_discounts, read_products
+// (read_products só é usado pra ler/gravar a lista de coleções de um
+// desconto -- na Shopify, "coleção" fica sob o escopo de Produtos, não tem
+// escopo próprio).
+// ============================================================================
+
+export const STORE_KEYS = ["basic", "exclusivos"] as const;
+export type StoreKey = (typeof STORE_KEYS)[number];
+
+export interface ShopifyStoreConfig {
+  key: StoreKey;
+  domain: string;
+  clientId: string;
+  clientSecret: string;
+}
+
+export function getStoreConfig(store: StoreKey): ShopifyStoreConfig | null {
+  const suffix = store.toUpperCase();
+  const domain = Deno.env.get(`SHOPIFY_STORE_DOMAIN_${suffix}`);
+  const clientId = Deno.env.get(`SHOPIFY_CLIENT_ID_${suffix}`);
+  const clientSecret = Deno.env.get(`SHOPIFY_CLIENT_SECRET_${suffix}`);
+  if (!domain || !clientId || !clientSecret) return null;
+  return { key: store, domain, clientId, clientSecret };
+}
+
+async function getAccessToken(config: ShopifyStoreConfig): Promise<string> {
+  const res = await fetch(`https://${config.domain}/admin/oauth/access_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Falha ao autenticar com a Shopify (${config.domain}): HTTP ${res.status}`);
+  }
+  const json = await res.json();
+  if (!json.access_token) throw new Error(`Shopify não devolveu access_token (${config.domain})`);
+  return json.access_token as string;
+}
+
+const ADMIN_API_VERSION = "2026-01";
+
+export class ShopifyGraphQLError extends Error {}
+
+export async function shopifyGraphQL<T = unknown>(
+  config: ShopifyStoreConfig,
+  query: string,
+  variables?: Record<string, unknown>,
+): Promise<T> {
+  const token = await getAccessToken(config);
+  const res = await fetch(`https://${config.domain}/admin/api/${ADMIN_API_VERSION}/graphql.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+    body: JSON.stringify({ query, variables }),
+  });
+  const json = await res.json();
+  if (json.errors) {
+    throw new ShopifyGraphQLError(`Erro GraphQL Shopify (${config.domain}): ${JSON.stringify(json.errors)}`);
+  }
+  return json.data as T;
+}
+
+/** Extrai a primeira mensagem de userErrors de uma mutation, se houver. */
+export function firstUserError(userErrors: { field?: string[] | null; message: string }[] | undefined): string | null {
+  if (!userErrors || userErrors.length === 0) return null;
+  return userErrors[0].message;
+}
+
+interface CollectionEdge {
+  node: { id: string };
+}
+
+interface DiscountCollectionsQueryResult {
+  codeDiscountNodes: {
+    edges: {
+      node: {
+        codeDiscount: {
+          customerGets?: {
+            items?: {
+              collections?: { edges: CollectionEdge[] };
+            };
+          };
+        };
+      };
+    }[];
+  };
+}
+
+/**
+ * Busca a lista de coleções do desconto mais recente da loja -- usado como
+ * "molde" pra saber em quais coleções um cupom novo deve nascer (todos os
+ * cupons de afiliado compartilham as mesmas coleções, mantidas em sincronia
+ * pela automação de "coleção nova").
+ */
+export async function getReferenceCollectionIds(config: ShopifyStoreConfig): Promise<string[]> {
+  const data = await shopifyGraphQL<DiscountCollectionsQueryResult>(
+    config,
+    `{
+      codeDiscountNodes(first: 1, sortKey: CREATED_AT, reverse: true) {
+        edges {
+          node {
+            codeDiscount {
+              ... on DiscountCodeBasic {
+                customerGets { items { ... on DiscountCollections { collections(first: 50) { edges { node { id } } } } } }
+              }
+            }
+          }
+        }
+      }
+    }`,
+  );
+  const edges = data.codeDiscountNodes.edges;
+  if (edges.length === 0) return [];
+  return (edges[0].node.codeDiscount.customerGets?.items?.collections?.edges ?? []).map((e) => e.node.id);
+}
+
+interface CreateDiscountResult {
+  discountCodeBasicCreate: {
+    codeDiscountNode: { id: string } | null;
+    userErrors: { field?: string[] | null; message: string }[];
+  };
+}
+
+/** Cria um cupom de afiliado novo, clonando as coleções de referência da loja. */
+export async function createAffiliateDiscount(
+  config: ShopifyStoreConfig,
+  params: { code: string; percentage: number; collectionIds: string[] },
+): Promise<string> {
+  const data = await shopifyGraphQL<CreateDiscountResult>(
+    config,
+    `mutation($input: DiscountCodeBasicInput!) {
+      discountCodeBasicCreate(basicCodeDiscount: $input) {
+        codeDiscountNode { id }
+        userErrors { field message }
+      }
+    }`,
+    {
+      input: {
+        title: params.code,
+        code: params.code,
+        startsAt: new Date().toISOString(),
+        context: { all: "ALL" },
+        appliesOncePerCustomer: false,
+        customerGets: {
+          value: { percentage: params.percentage },
+          items: { collections: { add: params.collectionIds } },
+        },
+      },
+    },
+  );
+
+  const err = firstUserError(data.discountCodeBasicCreate.userErrors);
+  if (err) throw new ShopifyGraphQLError(err);
+  const id = data.discountCodeBasicCreate.codeDiscountNode?.id;
+  if (!id) throw new ShopifyGraphQLError("Shopify não devolveu o ID do desconto criado");
+  return id;
+}
+
+interface UpdateDiscountResult {
+  discountCodeBasicUpdate: {
+    codeDiscountNode: { id: string } | null;
+    userErrors: { field?: string[] | null; message: string }[];
+  };
+}
+
+/** Renomeia o código de um cupom existente -- atualiza `code` E `title` juntos (são campos independentes na Shopify; só mudar `code` deixa o título mostrado no admin desatualizado). */
+export async function renameAffiliateDiscount(config: ShopifyStoreConfig, discountId: string, newCode: string): Promise<void> {
+  const data = await shopifyGraphQL<UpdateDiscountResult>(
+    config,
+    `mutation($id: ID!, $input: DiscountCodeBasicInput!) {
+      discountCodeBasicUpdate(id: $id, basicCodeDiscount: $input) {
+        codeDiscountNode { id }
+        userErrors { field message }
+      }
+    }`,
+    { id: discountId, input: { code: newCode, title: newCode } },
+  );
+  const err = firstUserError(data.discountCodeBasicUpdate.userErrors);
+  if (err) throw new ShopifyGraphQLError(err);
+}
+
+/** Adiciona uma coleção à lista de coleções elegíveis de um cupom -- operação aditiva (não substitui a lista existente), segura de repetir (idempotente). */
+export async function addCollectionToDiscount(config: ShopifyStoreConfig, discountId: string, collectionId: string): Promise<void> {
+  const data = await shopifyGraphQL<UpdateDiscountResult>(
+    config,
+    `mutation($id: ID!, $input: DiscountCodeBasicInput!) {
+      discountCodeBasicUpdate(id: $id, basicCodeDiscount: $input) {
+        codeDiscountNode { id }
+        userErrors { field message }
+      }
+    }`,
+    { id: discountId, input: { customerGets: { items: { collections: { add: [collectionId] } } } } },
+  );
+  const err = firstUserError(data.discountCodeBasicUpdate.userErrors);
+  if (err) throw new ShopifyGraphQLError(err);
+}
+
+interface DeleteDiscountResult {
+  discountCodeDelete: {
+    deletedCodeDiscountId: string | null;
+    userErrors: { field?: string[] | null; message: string }[];
+  };
+}
+
+/** Apaga um cupom de vez. Trata "não encontrado" como sucesso (já não existe, nada a fazer). */
+export async function deleteAffiliateDiscount(config: ShopifyStoreConfig, discountId: string): Promise<void> {
+  const data = await shopifyGraphQL<DeleteDiscountResult>(
+    config,
+    `mutation($id: ID!) {
+      discountCodeDelete(id: $id) {
+        deletedCodeDiscountId
+        userErrors { field message }
+      }
+    }`,
+    { id: discountId },
+  );
+  const err = firstUserError(data.discountCodeDelete.userErrors);
+  if (err && !/not found|does not exist/i.test(err)) throw new ShopifyGraphQLError(err);
+}

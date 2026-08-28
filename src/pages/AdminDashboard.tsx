@@ -98,6 +98,8 @@ export function AdminDashboard() {
   const [addMemberError, setAddMemberError] = useState<string | null>(null);
 
   const [addMemberResult, setAddMemberResult] = useState<{ coupon: string; password: string } | null>(null);
+  const [newMemberStoreBasic, setNewMemberStoreBasic] = useState(false);
+  const [newMemberStoreExclusivos, setNewMemberStoreExclusivos] = useState(false);
 
   async function handleAddMember() {
     setAddMemberError(null);
@@ -128,18 +130,45 @@ export function AdminDashboard() {
     const { data: loginData, error: loginError } = await invokeAdminFunction("create-member-login", {
       member_id: created.id,
     });
-    setAddingMember(false);
 
+    // E já cria o cupom nas lojas Shopify marcadas, se alguma foi marcada.
+    const stores: ("basic" | "exclusivos")[] = [
+      ...(newMemberStoreBasic ? (["basic"] as const) : []),
+      ...(newMemberStoreExclusivos ? (["exclusivos"] as const) : []),
+    ];
+    let shopifyWarning: string | null = null;
+    if (stores.length > 0) {
+      const { data: shopifyData, error: shopifyError } = await invokeAdminFunction("shopify-sync-coupon", {
+        member_id: created.id,
+        action: "create",
+        stores,
+      });
+      if (shopifyError || shopifyData?.error) {
+        shopifyWarning = (await extractFunctionErrorMessage(shopifyError, shopifyData)) ?? "Não deu pra criar o cupom na Shopify.";
+      } else {
+        const failed = (shopifyData?.results ?? []).filter((r: { ok: boolean }) => !r.ok);
+        if (failed.length > 0) {
+          shopifyWarning = `Cupom não criado em: ${failed.map((r: { store: string; reason?: string }) => `${r.store}${r.reason ? ` (${r.reason})` : ""}`).join(", ")}.`;
+        }
+      }
+    }
+
+    setAddingMember(false);
     setNewMemberName("");
     setNewMemberCoupon("");
+    setNewMemberStoreBasic(false);
+    setNewMemberStoreExclusivos(false);
     setReloadTick((t) => t + 1);
 
     if (loginError || loginData?.error) {
       const reason = await extractFunctionErrorMessage(loginError, loginData);
-      setAddMemberError(`Membro cadastrado, mas não deu pra criar o login automaticamente${reason ? `: ${reason}` : ""}. Tenta "Criar login" na tabela.`);
+      setAddMemberError(
+        `Membro cadastrado, mas não deu pra criar o login automaticamente${reason ? `: ${reason}` : ""}. Tenta "Criar login" na tabela.`,
+      );
       return;
     }
 
+    if (shopifyWarning) setAddMemberError(shopifyWarning);
     setAddMemberResult({ coupon: loginData.coupon_code, password: loginData.temp_password });
   }
 
@@ -170,15 +199,38 @@ export function AdminDashboard() {
       return;
     }
 
+    const couponChanged = rows.find((r) => r.id === id)?.coupon_code !== coupon;
+
     setSavingEdit(true);
     const { error } = await supabase.from("members").update({ name, coupon_code: coupon }).eq("id", id);
-    setSavingEdit(false);
 
     if (error) {
+      setSavingEdit(false);
       setEditError(error.code === "23505" ? `Já existe um membro com o cupom "${coupon}".` : "Não deu pra salvar. Tenta de novo.");
       return;
     }
 
+    // Cupom mudou de nome -- renomeia (não recria) nas lojas Shopify onde
+    // esse membro já tiver um cupom sincronizado.
+    if (couponChanged) {
+      const { data: shopifyData, error: shopifyError } = await invokeAdminFunction("shopify-sync-coupon", {
+        member_id: id,
+        action: "rename",
+        new_coupon_code: coupon,
+      });
+      if (shopifyError || shopifyData?.error) {
+        setEditError((await extractFunctionErrorMessage(shopifyError, shopifyData)) ?? "Cupom salvo, mas não deu pra renomear na Shopify.");
+      } else {
+        const failed = (shopifyData?.results ?? []).filter((r: { ok: boolean }) => !r.ok);
+        if (failed.length > 0) {
+          setEditError(
+            `Cupom salvo, mas não renomeou na Shopify: ${failed.map((r: { store: string; reason?: string }) => `${r.store}${r.reason ? ` (${r.reason})` : ""}`).join(", ")}.`,
+          );
+        }
+      }
+    }
+
+    setSavingEdit(false);
     setEditingMemberId(null);
     setReloadTick((t) => t + 1);
   }
@@ -298,6 +350,10 @@ export function AdminDashboard() {
       const reason = await extractFunctionErrorMessage(error, data);
       window.alert(`Não deu pra apagar${reason ? `: ${reason}` : ". Tenta de novo."}`);
       return;
+    }
+
+    if (data?.shopify_delete_warning) {
+      window.alert(data.shopify_delete_warning);
     }
 
     setReloadTick((t) => t + 1);
@@ -1054,6 +1110,24 @@ export function AdminDashboard() {
               value={newMemberCoupon}
               onChange={(e) => setNewMemberCoupon(e.target.value)}
             />
+          </div>
+
+          <div className="mm-field">
+            <label className="mm-label">Criar cupom na Shopify</label>
+            <div style={{ display: "flex", gap: 16, height: 42, alignItems: "center" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input type="checkbox" checked={newMemberStoreBasic} onChange={(e) => setNewMemberStoreBasic(e.target.checked)} />
+                Basic
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={newMemberStoreExclusivos}
+                  onChange={(e) => setNewMemberStoreExclusivos(e.target.checked)}
+                />
+                Exclusivos
+              </label>
+            </div>
           </div>
 
           <button type="button" className="mm-config-save-btn" disabled={addingMember} onClick={handleAddMember}>

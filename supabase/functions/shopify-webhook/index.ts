@@ -7,6 +7,9 @@
 //   - refunds/create       -> apaga a venda (pedido estornado, total ou parcial)
 //   - discounts/create     -> cadastra o membro automaticamente (cupom novo)
 //   - discount_codes/create -> idem, formato legado da API de price rules
+//   - collections/create   -> adiciona a coleção nova em TODO cupom de
+//     afiliado já sincronizado naquela loja (write real na Shopify, usa
+//     supabase/functions/_shared/shopify.ts com client credentials grant)
 // O trigger do banco recalcula o ciclo do mês automaticamente em qualquer
 // insert/delete de `sales`.
 //
@@ -29,6 +32,7 @@
 //        -> Event: "Discount creation" (discounts/create) — se não aparecer
 //           essa opção na sua loja, procure "Discount code creation"
 //           (discount_codes/create), que a function também entende.
+//        -> Event: "Collection creation" (collections/create)
 //        -> Format: JSON
 //        -> URL: https://<seu-projeto>.supabase.co/functions/v1/shopify-webhook
 //   4. Copie o "Signing secret" de cada loja pro secret correspondente.
@@ -38,6 +42,7 @@
 // ============================================================================
 
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { addCollectionToDiscount, getStoreConfig, ShopifyGraphQLError, type StoreKey } from "../_shared/shopify.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -315,6 +320,72 @@ async function handleDiscountCreated(payload: Record<string, unknown>): Promise<
   return jsonResponse({ ok: true, member_id: member.id, coupon_code: couponCode, login_created: !linkError });
 }
 
+interface ShopifyCollectionPayload {
+  id: number | string;
+  admin_graphql_api_id?: string;
+}
+
+function collectionGid(payload: ShopifyCollectionPayload): string {
+  return payload.admin_graphql_api_id || `gid://shopify/Collection/${payload.id}`;
+}
+
+// A mesma URL de webhook atende as duas lojas -- o header x-shopify-shop-domain
+// diz de qual loja veio o evento, pra saber que loja usar na chamada de volta
+// (write) e qual coluna de member.shopify_discount_id_* olhar.
+function resolveStore(shopDomain: string | null): StoreKey | null {
+  if (!shopDomain) return null;
+  if (shopDomain === Deno.env.get("SHOPIFY_STORE_DOMAIN_BASIC")) return "basic";
+  if (shopDomain === Deno.env.get("SHOPIFY_STORE_DOMAIN_EXCLUSIVOS")) return "exclusivos";
+  return null;
+}
+
+// Coleção nova criada na Shopify -> adiciona ela na lista de coleções
+// elegíveis de TODO cupom de afiliado já sincronizado naquela loja (mesma
+// automação que o admin faria na mão, uma por uma, hoje). Operação aditiva
+// e idempotente (ver addCollectionToDiscount) -- seguro se a Shopify reenviar
+// o mesmo webhook mais de uma vez.
+async function handleCollectionCreated(payload: ShopifyCollectionPayload, shopDomain: string | null): Promise<Response> {
+  const store = resolveStore(shopDomain);
+  if (!store) {
+    return jsonResponse({ skipped: true, reason: `Loja não reconhecida pelo domínio '${shopDomain}'` });
+  }
+
+  const config = getStoreConfig(store);
+  if (!config) {
+    console.error(`Credenciais da Shopify não configuradas pra ${store}`);
+    return jsonResponse({ error: `Credenciais da Shopify não configuradas pra ${store}` }, 500);
+  }
+
+  const column = store === "basic" ? "shopify_discount_id_basic" : "shopify_discount_id_exclusivos";
+  const { data: members, error } = await supabase.from("members").select(`id, coupon_code, ${column}`).not(column, "is", null);
+
+  if (error) {
+    console.error("Erro ao buscar membros com cupom sincronizado:", error);
+    return jsonResponse({ error: "Erro interno ao buscar membros" }, 500);
+  }
+
+  const collectionId = collectionGid(payload);
+  const results: { coupon_code: string; ok: boolean; reason?: string }[] = [];
+
+  for (const m of (members ?? []) as Record<string, unknown>[]) {
+    const discountId = m[column] as string;
+    try {
+      await addCollectionToDiscount(config, discountId, collectionId);
+      results.push({ coupon_code: m.coupon_code as string, ok: true });
+    } catch (err) {
+      console.error(`Erro ao adicionar coleção no cupom ${m.coupon_code} (${store}):`, err);
+      results.push({
+        coupon_code: m.coupon_code as string,
+        ok: false,
+        reason: err instanceof ShopifyGraphQLError ? err.message : "Erro na Shopify",
+      });
+    }
+  }
+
+  const failed = results.filter((r) => !r.ok);
+  return jsonResponse({ ok: true, store, collection_id: collectionId, updated: results.length - failed.length, failed });
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -348,6 +419,10 @@ Deno.serve(async (req: Request) => {
 
   if (topic === "discounts/create" || topic === "discount_codes/create") {
     return await handleDiscountCreated(payload);
+  }
+
+  if (topic === "collections/create") {
+    return await handleCollectionCreated(payload as unknown as ShopifyCollectionPayload, req.headers.get("x-shopify-shop-domain"));
   }
 
   return await handleOrderPaid(payload as unknown as ShopifyOrderPayload);

@@ -1,11 +1,16 @@
 // ============================================================================
 // Edge Function: delete-member
-// Chamada pelo painel admin (botão "Excluir" na tabela de membros). Apaga a
-// conta de Auth do membro (se existir) e depois a linha em `members` — as
-// duas coisas, nessa ordem, porque só o backend (service role) pode apagar
-// conta de Auth. Antes disso o "Excluir" só apagava `members` direto do
-// client, deixando a conta de Auth órfã: se alguém recriasse o membro com o
-// mesmo cupom/e-mail depois, a Auth recusava por "already registered".
+// Chamada pelo painel admin (botão "Excluir" na tabela de membros). Apaga o
+// cupom nas lojas Shopify onde o membro tiver um (mão dupla), a conta de
+// Auth do membro (se existir) e depois a linha em `members` — nessa ordem,
+// porque só o backend (service role) pode apagar conta de Auth. Antes disso
+// o "Excluir" só apagava `members` direto do client, deixando a conta de
+// Auth órfã: se alguém recriasse o membro com o mesmo cupom/e-mail depois, a
+// Auth recusava por "already registered".
+//
+// A falha ao apagar da Shopify NÃO trava a exclusão (o admin já confirmou
+// digitando o cupom, não faz sentido travar por causa de uma API externa) —
+// só reporta de volta pra o admin poder apagar manualmente se precisar.
 //
 // Deploy (roda você/o Vitor, precisa de `supabase login` primeiro):
 //   npx supabase functions deploy delete-member --project-ref tflxotunokypiakkdyxs
@@ -13,6 +18,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
+import { deleteAffiliateDiscount, getStoreConfig, ShopifyGraphQLError, STORE_KEYS, type StoreKey } from "../_shared/shopify.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -67,7 +73,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: targetMember, error: targetError } = await adminClient
     .from("members")
-    .select("id, coupon_code, name, auth_user_id, is_admin")
+    .select("id, coupon_code, name, auth_user_id, is_admin, shopify_discount_id_basic, shopify_discount_id_exclusivos")
     .eq("id", body.member_id)
     .maybeSingle();
 
@@ -77,6 +83,24 @@ Deno.serve(async (req: Request) => {
 
   if (targetMember.is_admin) {
     return jsonResponse({ error: "Não dá pra excluir uma conta de admin por aqui" }, 400);
+  }
+
+  const discountIdByStore: Record<StoreKey, string | null> = {
+    basic: targetMember.shopify_discount_id_basic,
+    exclusivos: targetMember.shopify_discount_id_exclusivos,
+  };
+  const shopifyDeleteFailures: string[] = [];
+  for (const store of STORE_KEYS) {
+    const discountId = discountIdByStore[store];
+    if (!discountId) continue;
+    const config = getStoreConfig(store);
+    if (!config) continue;
+    try {
+      await deleteAffiliateDiscount(config, discountId);
+    } catch (err) {
+      console.error(`Erro ao apagar cupom na Shopify (${store}):`, err);
+      shopifyDeleteFailures.push(`${store}${err instanceof ShopifyGraphQLError ? `: ${err.message}` : ""}`);
+    }
   }
 
   if (targetMember.auth_user_id) {
@@ -96,5 +120,11 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Login apagado, mas não deu pra apagar o membro. Chama o suporte." }, 500);
   }
 
-  return jsonResponse({ ok: true, coupon_code: targetMember.coupon_code, name: targetMember.name });
+  return jsonResponse({
+    ok: true,
+    coupon_code: targetMember.coupon_code,
+    name: targetMember.name,
+    shopify_delete_warning:
+      shopifyDeleteFailures.length > 0 ? `Membro apagado, mas não deu pra apagar o cupom na Shopify (${shopifyDeleteFailures.join(", ")}) — apaga manualmente lá.` : undefined,
+  });
 });
