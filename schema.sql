@@ -58,6 +58,11 @@ create table if not exists sales (
   -- 'shopify' = veio do webhook, 'manual' = admin lançou (pedido fechado por
   -- WhatsApp, fora da Shopify).
   source text not null default 'shopify' check (source in ('shopify', 'manual')),
+  -- id do pedido no sistema de Vendas Externas (mental-madness-vendas-externas),
+  -- outro projeto do Vitor -- garante idempotência (mesmo pedido não gera
+  -- duas vendas aqui mesmo se a chamada repetir). Nullable: só preenchido
+  -- pra vendas que vieram de lá.
+  external_order_id uuid,
   created_at timestamptz not null default now()
 );
 
