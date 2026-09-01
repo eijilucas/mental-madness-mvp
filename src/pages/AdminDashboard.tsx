@@ -622,7 +622,7 @@ export function AdminDashboard() {
   async function handleSendPixAll() {
     setPayoutError(null);
 
-    const missingPixKey = pendingPayouts.find(
+    const missingPixKey = visiblePendingPayouts.find(
       (p) =>
         !(pixKeyDrafts[p.members.id] ?? p.members.pix_key ?? "").trim() ||
         !(pixKeyTypeDrafts[p.members.id] ?? p.members.pix_key_type ?? "").trim(),
@@ -632,9 +632,9 @@ export function AdminDashboard() {
       return;
     }
 
-    const names = pendingPayouts.map((p) => `${p.members.name} — ${currencyFormatter.format(p.commission_amount)}`).join("\n");
+    const names = visiblePendingPayouts.map((p) => `${p.members.name} — ${currencyFormatter.format(p.commission_amount)}`).join("\n");
     const typed = window.prompt(
-      `Vai enviar PIX pra ${pendingPayouts.length} pessoa(s), total ${currencyFormatter.format(totalPendingPayout)}:\n\n${names}\n\nPra confirmar, digite ENVIAR:`,
+      `Vai enviar PIX pra ${visiblePendingPayouts.length} pessoa(s), total ${currencyFormatter.format(totalPendingPayout)}:\n\n${names}\n\nPra confirmar, digite ENVIAR:`,
     );
     if (typed !== "ENVIAR") {
       if (typed !== null) window.alert('Não digitou "ENVIAR" — nada foi enviado.');
@@ -642,7 +642,7 @@ export function AdminDashboard() {
     }
 
     setPayingAll(true);
-    await callPayCommissionPix(pendingPayouts.map((p) => p.id));
+    await callPayCommissionPix(visiblePendingPayouts.map((p) => p.id));
     setPayingAll(false);
   }
 
@@ -745,11 +745,19 @@ export function AdminDashboard() {
     return copy;
   }, [rows, sortKey, sortDir, memberSearch]);
 
-  const totalPendingPayout = pendingPayouts.reduce((sum, p) => sum + p.commission_amount, 0);
+  // `pendingPayouts` traz TODOS os meses fechados com comissão pendente,
+  // não só o que tá selecionado no seletor de mês do topo (a query em
+  // loadPayments não filtra por mês). Sem esse filtro, o mesmo pagamento
+  // aparecia igual não importa qual mês você tivesse navegando -- parecia
+  // "duplicado" entre o mês atual e o anterior. Mostra só o que é do mês
+  // que tá sendo visto.
+  const visiblePendingPayouts = pendingPayouts.filter((p) => p.cycle_month === selectedMonth);
+
+  const totalPendingPayout = visiblePendingPayouts.reduce((sum, p) => sum + p.commission_amount, 0);
 
   const ASAAS_FREE_TRANSFERS_PER_MONTH = 30;
   const ASAAS_FEE_PER_TRANSFER = 2;
-  const transfersIfSendAllNow = transfersUsedThisMonth + pendingPayouts.length;
+  const transfersIfSendAllNow = transfersUsedThisMonth + visiblePendingPayouts.length;
   const extraTransferFees = Math.max(0, transfersIfSendAllNow - ASAAS_FREE_TRANSFERS_PER_MONTH) * ASAAS_FEE_PER_TRANSFER;
 
   const totalSales = rows.reduce((sum, r) => sum + (r.cycle?.sales_count ?? 0), 0);
@@ -870,7 +878,7 @@ export function AdminDashboard() {
         <div className="mm-label" style={{ marginBottom: 20 }}>
           {transfersUsedThisMonth} de {ASAAS_FREE_TRANSFERS_PER_MONTH} transferências PIX grátis já usadas este mês
           {extraTransferFees > 0
-            ? ` — enviar as ${pendingPayouts.length} pendentes agora passaria do limite e custaria ~${currencyFormatter.format(extraTransferFees)} em taxa do Asaas (R$2 por transferência extra).`
+            ? ` — enviar as ${visiblePendingPayouts.length} pendentes agora passaria do limite e custaria ~${currencyFormatter.format(extraTransferFees)} em taxa do Asaas (R$2 por transferência extra).`
             : "."}
         </div>
 
@@ -914,8 +922,8 @@ export function AdminDashboard() {
           Pronto pra Pagar (meses fechados)
         </h3>
 
-        {pendingPayouts.length === 0 ? (
-          <div className="mm-empty-state">Nenhuma comissão pendente de pagamento.</div>
+        {visiblePendingPayouts.length === 0 ? (
+          <div className="mm-empty-state">Nenhuma comissão pendente de pagamento pra {formatCycleMonthLabel(selectedMonth)}.</div>
         ) : (
           <>
             <table className="mm-table">
@@ -930,7 +938,7 @@ export function AdminDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {pendingPayouts.map((payout) => (
+                {visiblePendingPayouts.map((payout) => (
                   <tr key={payout.id}>
                     <td>
                       <span className="mm-member-row-name">{payout.members.name}</span>{" "}
