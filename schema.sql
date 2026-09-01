@@ -66,6 +66,11 @@ create table if not exists sales (
   created_at timestamptz not null default now()
 );
 
+-- Parcial (só quando não nulo) -- garante idempotência de
+-- register-external-order-sale sem impedir múltiplas vendas com
+-- external_order_id nulo (Shopify/manual).
+create unique index if not exists sales_external_order_id_idx on sales (external_order_id) where external_order_id is not null;
+
 create index if not exists idx_sales_member_id on sales (member_id);
 create index if not exists idx_sales_sale_date on sales (sale_date);
 
