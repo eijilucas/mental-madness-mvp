@@ -2,3 +2,6 @@ project_id = "tflxotunokypiakkdyxs"
 
 [functions.shopify-webhook]
 verify_jwt = false
+
+[functions.register-external-order-sale]
+verify_jwt = false
