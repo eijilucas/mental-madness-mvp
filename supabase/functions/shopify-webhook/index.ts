@@ -255,6 +255,40 @@ async function handleOrderReversal(orderId: string | number): Promise<Response> 
   return jsonResponse({ ok: true, reverted_order_id: String(orderId) });
 }
 
+// Acha o discount_id do cupom recém-criado (ou já existente) NESSA loja e
+// salva em members.shopify_discount_id_<loja> -- sem isso o cupom fica
+// invisível pra automação de "coleção nova" (aquele webhook só olha membros
+// com essa coluna preenchida). Também sincroniza de cara com as coleções
+// que um cupom nosso já rastreado tiver, já que um cupom criado direto na
+// Shopify só vem com o que a pessoa selecionou na hora (normalmente
+// incompleto em relação aos drops mais antigos). Best-effort: falha aqui
+// não impede o resto do fluxo, só deixa sem auto-sync até um backfill
+// manual.
+async function linkAndSyncDiscount(memberId: string, couponCode: string, store: StoreKey): Promise<void> {
+  const config = getStoreConfig(store);
+  if (!config) return;
+
+  const column = store === "basic" ? "shopify_discount_id_basic" : "shopify_discount_id_exclusivos";
+
+  const discountId = await findDiscountIdByCode(config, couponCode);
+  if (!discountId) return;
+
+  await supabase.from("members").update({ [column]: discountId }).eq("id", memberId);
+
+  const { data: referenceMember } = await supabase
+    .from("members")
+    .select(column)
+    .not(column, "is", null)
+    .neq("id", memberId)
+    .limit(1)
+    .maybeSingle();
+  const referenceId = (referenceMember as Record<string, unknown> | null)?.[column] as string | undefined;
+  if (referenceId) {
+    const collectionIds = await getDiscountCollectionIds(config, referenceId);
+    await addCollectionsToDiscount(config, discountId, collectionIds);
+  }
+}
+
 // Cupom novo criado na Shopify -> cadastra o membro automaticamente. O nome
 // sai igual ao código do cupom (a Shopify não sabe o nome de verdade do
 // afiliado) — o admin corrige depois pelo ícone de lápis na tabela. Já cria
@@ -272,9 +306,11 @@ async function handleDiscountCreated(payload: Record<string, unknown>, shopDomai
     return jsonResponse({ skipped: true, reason: "Código de cupom vazio" });
   }
 
+  const store = resolveStore(shopDomain);
+
   const { data: existing, error: existingError } = await supabase
     .from("members")
-    .select("id")
+    .select("id, shopify_discount_id_basic, shopify_discount_id_exclusivos")
     .ilike("coupon_code", couponCode)
     .maybeSingle();
 
@@ -284,7 +320,23 @@ async function handleDiscountCreated(payload: Record<string, unknown>, shopDomai
   }
 
   if (existing) {
-    // Cupom já tem membro cadastrado (ex: foi adicionado manualmente antes) — não duplica.
+    // Cupom já tem membro cadastrado (ex: criado antes na OUTRA loja, com o
+    // mesmo código) — não duplica o membro, mas se ainda não tem o
+    // discount_id DESSA loja salvo, vincula e sincroniza agora. Sem isso,
+    // um cupom recriado com o mesmo código numa segunda loja ficava pra
+    // sempre invisível pra automação nessa loja.
+    const column = store === "basic" ? "shopify_discount_id_basic" : "shopify_discount_id_exclusivos";
+    const alreadyLinked = store ? Boolean((existing as Record<string, unknown>)[column]) : true;
+
+    if (store && !alreadyLinked) {
+      try {
+        await linkAndSyncDiscount(existing.id, couponCode, store);
+      } catch (err) {
+        console.error(`Não achou/sincronizou o discount_id do cupom ${couponCode} (${store}):`, err);
+      }
+      return jsonResponse({ ok: true, member_id: existing.id, coupon_code: couponCode, linked_store: store });
+    }
+
     return jsonResponse({ skipped: true, reason: `Já existe membro pro cupom '${couponCode}'` });
   }
 
@@ -324,43 +376,11 @@ async function handleDiscountCreated(payload: Record<string, unknown>, shopDomai
     console.error("Login criado, mas falhou ao vincular ao membro:", linkError);
   }
 
-  // Achar e salvar o ID do desconto que a Shopify acabou de criar -- sem
-  // isso, esse cupom fica invisível pra automação de "coleção nova"
-  // (aquele webhook só olha membros com shopify_discount_id_<loja>
-  // preenchido). Best-effort: se falhar, o cupom fica cadastrado normal,
-  // só sem o auto-sync de coleção até alguém rodar o backfill manual.
-  const store = resolveStore(shopDomain);
   if (store) {
-    const config = getStoreConfig(store);
-    if (config) {
-      try {
-        const discountId = await findDiscountIdByCode(config, couponCode);
-        if (discountId) {
-          const column = store === "basic" ? "shopify_discount_id_basic" : "shopify_discount_id_exclusivos";
-          await supabase.from("members").update({ [column]: discountId }).eq("id", member.id);
-
-          // Esse cupom foi criado direto na Shopify (não pelo nosso
-          // painel), então só tem as coleções que a pessoa selecionou na
-          // hora -- normalmente incompletas em relação ao que os outros
-          // cupons já têm (drops mais antigos). Sincroniza logo de cara com
-          // o que um cupom nosso já rastreado tiver, pra não nascer
-          // faltando drop antigo.
-          const { data: referenceMember } = await supabase
-            .from("members")
-            .select(column)
-            .not(column, "is", null)
-            .neq("id", member.id)
-            .limit(1)
-            .maybeSingle();
-          const referenceId = (referenceMember as Record<string, unknown> | null)?.[column] as string | undefined;
-          if (referenceId) {
-            const collectionIds = await getDiscountCollectionIds(config, referenceId);
-            await addCollectionsToDiscount(config, discountId, collectionIds);
-          }
-        }
-      } catch (err) {
-        console.error(`Não achou/sincronizou o discount_id do cupom ${couponCode} (${store}):`, err);
-      }
+    try {
+      await linkAndSyncDiscount(member.id, couponCode, store);
+    } catch (err) {
+      console.error(`Não achou/sincronizou o discount_id do cupom ${couponCode} (${store}):`, err);
     }
   }
 
