@@ -42,7 +42,14 @@
 // ============================================================================
 
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { addCollectionToDiscount, findDiscountIdByCode, getStoreConfig, ShopifyGraphQLError, type StoreKey } from "../_shared/shopify.ts";
+import {
+  addCollectionsToDiscount,
+  findDiscountIdByCode,
+  getDiscountCollectionIds,
+  getStoreConfig,
+  ShopifyGraphQLError,
+  type StoreKey,
+} from "../_shared/shopify.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -331,9 +338,28 @@ async function handleDiscountCreated(payload: Record<string, unknown>, shopDomai
         if (discountId) {
           const column = store === "basic" ? "shopify_discount_id_basic" : "shopify_discount_id_exclusivos";
           await supabase.from("members").update({ [column]: discountId }).eq("id", member.id);
+
+          // Esse cupom foi criado direto na Shopify (não pelo nosso
+          // painel), então só tem as coleções que a pessoa selecionou na
+          // hora -- normalmente incompletas em relação ao que os outros
+          // cupons já têm (drops mais antigos). Sincroniza logo de cara com
+          // o que um cupom nosso já rastreado tiver, pra não nascer
+          // faltando drop antigo.
+          const { data: referenceMember } = await supabase
+            .from("members")
+            .select(column)
+            .not(column, "is", null)
+            .neq("id", member.id)
+            .limit(1)
+            .maybeSingle();
+          const referenceId = (referenceMember as Record<string, unknown> | null)?.[column] as string | undefined;
+          if (referenceId) {
+            const collectionIds = await getDiscountCollectionIds(config, referenceId);
+            await addCollectionsToDiscount(config, discountId, collectionIds);
+          }
         }
       } catch (err) {
-        console.error(`Não achou/salvou o discount_id do cupom ${couponCode} (${store}):`, err);
+        console.error(`Não achou/sincronizou o discount_id do cupom ${couponCode} (${store}):`, err);
       }
     }
   }
@@ -363,7 +389,7 @@ function resolveStore(shopDomain: string | null): StoreKey | null {
 // Coleção nova criada na Shopify -> adiciona ela na lista de coleções
 // elegíveis de TODO cupom de afiliado já sincronizado naquela loja (mesma
 // automação que o admin faria na mão, uma por uma, hoje). Operação aditiva
-// e idempotente (ver addCollectionToDiscount) -- seguro se a Shopify reenviar
+// e idempotente (ver addCollectionsToDiscount) -- seguro se a Shopify reenviar
 // o mesmo webhook mais de uma vez.
 async function handleCollectionCreated(payload: ShopifyCollectionPayload, shopDomain: string | null): Promise<Response> {
   const store = resolveStore(shopDomain);
@@ -391,7 +417,7 @@ async function handleCollectionCreated(payload: ShopifyCollectionPayload, shopDo
   for (const m of (members ?? []) as Record<string, unknown>[]) {
     const discountId = m[column] as string;
     try {
-      await addCollectionToDiscount(config, discountId, collectionId);
+      await addCollectionsToDiscount(config, discountId, [collectionId]);
       results.push({ coupon_code: m.coupon_code as string, ok: true });
     } catch (err) {
       console.error(`Erro ao adicionar coleção no cupom ${m.coupon_code} (${store}):`, err);

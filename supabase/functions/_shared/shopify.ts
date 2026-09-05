@@ -208,8 +208,9 @@ export async function renameAffiliateDiscount(config: ShopifyStoreConfig, discou
   if (err) throw new ShopifyGraphQLError(err);
 }
 
-/** Adiciona uma coleção à lista de coleções elegíveis de um cupom -- operação aditiva (não substitui a lista existente), segura de repetir (idempotente). */
-export async function addCollectionToDiscount(config: ShopifyStoreConfig, discountId: string, collectionId: string): Promise<void> {
+/** Adiciona uma ou mais coleções à lista de coleções elegíveis de um cupom -- operação aditiva (não substitui a lista existente), segura de repetir (idempotente, mesmo se algumas já estiverem lá). */
+export async function addCollectionsToDiscount(config: ShopifyStoreConfig, discountId: string, collectionIds: string[]): Promise<void> {
+  if (collectionIds.length === 0) return;
   const data = await shopifyGraphQL<UpdateDiscountResult>(
     config,
     `mutation($id: ID!, $input: DiscountCodeBasicInput!) {
@@ -218,7 +219,7 @@ export async function addCollectionToDiscount(config: ShopifyStoreConfig, discou
         userErrors { field message }
       }
     }`,
-    { id: discountId, input: { customerGets: { items: { collections: { add: [collectionId] } } } } },
+    { id: discountId, input: { customerGets: { items: { collections: { add: collectionIds } } } } },
   );
   const err = firstUserError(data.discountCodeBasicUpdate.userErrors);
   if (err) throw new ShopifyGraphQLError(err);
