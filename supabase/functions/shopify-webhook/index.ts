@@ -10,6 +10,12 @@
 //   - collections/create   -> adiciona a coleção nova em TODO cupom de
 //     afiliado já sincronizado naquela loja (write real na Shopify, usa
 //     supabase/functions/_shared/shopify.ts com client credentials grant)
+//   - discounts/delete     -> apaga o membro (login + histórico de vendas/
+//     comissão) quando o cupom correspondente é apagado direto na Shopify --
+//     mesmo comportamento (irreversível) do botão "Excluir" manual, só que
+//     sem confirmação (evento automático não tem como pedir pra digitar o
+//     cupom). Payload só traz o ID do desconto apagado, casado contra
+//     members.shopify_discount_id_<loja>.
 // O trigger do banco recalcula o ciclo do mês automaticamente em qualquer
 // insert/delete de `sales`.
 //
@@ -33,6 +39,7 @@
 //           essa opção na sua loja, procure "Discount code creation"
 //           (discount_codes/create), que a function também entende.
 //        -> Event: "Collection creation" (collections/create)
+//        -> Event: "Discount deletion" (discounts/delete)
 //        -> Format: JSON
 //        -> URL: https://<seu-projeto>.supabase.co/functions/v1/shopify-webhook
 //   4. Copie o "Signing secret" de cada loja pro secret correspondente.
@@ -44,10 +51,12 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import {
   addCollectionsToDiscount,
+  deleteAffiliateDiscount,
   findDiscountIdByCode,
   getDiscountCollectionIds,
   getStoreConfig,
   ShopifyGraphQLError,
+  STORE_KEYS,
   type StoreKey,
 } from "../_shared/shopify.ts";
 
@@ -466,6 +475,80 @@ async function handleCollectionCreated(payload: ShopifyCollectionPayload, shopDo
   return jsonResponse({ ok: true, store, collection_id: collectionId, updated: results.length - failed.length, failed });
 }
 
+interface ShopifyDiscountDeletedPayload {
+  admin_graphql_api_id?: string;
+  id?: number | string;
+}
+
+// Desconto apagado direto na Shopify -> apaga o membro correspondente por
+// completo (login + histórico de vendas/comissão), igual o botão "Excluir"
+// manual do painel -- irreversível, sem confirmação (evento automático não
+// tem como pedir pra digitar o cupom). Casa o discount_id do payload contra
+// members.shopify_discount_id_<loja>; se o membro tiver cupom nas DUAS
+// lojas, apaga o desconto da outra loja também antes de apagar o membro
+// (mesmo comportamento do delete-member).
+async function handleDiscountDeleted(payload: ShopifyDiscountDeletedPayload, shopDomain: string | null): Promise<Response> {
+  const discountId = payload.admin_graphql_api_id || (payload.id ? `gid://shopify/DiscountCodeNode/${payload.id}` : null);
+  if (!discountId) {
+    return jsonResponse({ skipped: true, reason: "Payload sem ID do desconto apagado" });
+  }
+
+  const store = resolveStore(shopDomain);
+  if (!store) {
+    return jsonResponse({ skipped: true, reason: `Loja não reconhecida pelo domínio '${shopDomain}'` });
+  }
+
+  const column = store === "basic" ? "shopify_discount_id_basic" : "shopify_discount_id_exclusivos";
+
+  const { data: member, error } = await supabase
+    .from("members")
+    .select("id, coupon_code, name, auth_user_id, is_admin, shopify_discount_id_basic, shopify_discount_id_exclusivos")
+    .eq(column, discountId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("Erro ao buscar membro pelo discount_id apagado:", error);
+    return jsonResponse({ error: "Erro interno ao buscar membro" }, 500);
+  }
+  if (!member) {
+    return jsonResponse({ skipped: true, reason: "Nenhum membro rastreado com esse discount_id" });
+  }
+  if (member.is_admin) {
+    return jsonResponse({ skipped: true, reason: "Não apaga conta de admin automaticamente" });
+  }
+
+  const discountIdByStore: Record<StoreKey, string | null> = {
+    basic: member.shopify_discount_id_basic,
+    exclusivos: member.shopify_discount_id_exclusivos,
+  };
+  for (const s of STORE_KEYS) {
+    const id = discountIdByStore[s];
+    if (!id || id === discountId) continue; // o desta loja já foi apagado na Shopify, não precisa chamar de novo
+    const config = getStoreConfig(s);
+    if (!config) continue;
+    try {
+      await deleteAffiliateDiscount(config, id);
+    } catch (err) {
+      console.error(`Erro ao apagar cupom na outra loja (${s}) do membro ${member.coupon_code}:`, err);
+    }
+  }
+
+  if (member.auth_user_id) {
+    const { error: deleteAuthError } = await supabase.auth.admin.deleteUser(member.auth_user_id);
+    if (deleteAuthError && deleteAuthError.status !== 404) {
+      console.error("Erro ao apagar login do membro:", deleteAuthError);
+    }
+  }
+
+  const { error: deleteMemberError } = await supabase.from("members").delete().eq("id", member.id);
+  if (deleteMemberError) {
+    console.error("Login apagado, mas falhou ao apagar o membro:", deleteMemberError);
+    return jsonResponse({ error: "Erro interno ao apagar o membro" }, 500);
+  }
+
+  return jsonResponse({ ok: true, deleted_coupon: member.coupon_code });
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -510,6 +593,10 @@ Deno.serve(async (req: Request) => {
 
   if (topic === "collections/create") {
     return await handleCollectionCreated(payload as unknown as ShopifyCollectionPayload, req.headers.get("x-shopify-shop-domain"));
+  }
+
+  if (topic === "discounts/delete") {
+    return await handleDiscountDeleted(payload as unknown as ShopifyDiscountDeletedPayload, req.headers.get("x-shopify-shop-domain"));
   }
 
   return await handleOrderPaid(payload as unknown as ShopifyOrderPayload);
