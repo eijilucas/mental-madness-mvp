@@ -270,8 +270,21 @@ async function linkAndSyncDiscount(memberId: string, couponCode: string, store: 
 
   const column = store === "basic" ? "shopify_discount_id_basic" : "shopify_discount_id_exclusivos";
 
-  const discountId = await findDiscountIdByCode(config, couponCode);
-  if (!discountId) return;
+  // O índice de busca da Shopify (usado por findDiscountIdByCode) às vezes
+  // ainda não indexou o desconto no exato momento em que o webhook
+  // discounts/create chega -- sem retry, a busca vinha vazia e a gente
+  // desistia calado (reproduzido com TESTE67: existia e era encontrável
+  // segundos depois, mas a primeira tentativa não achou nada).
+  let discountId: string | null = null;
+  for (const delayMs of [0, 1000, 2000, 4000]) {
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    discountId = await findDiscountIdByCode(config, couponCode);
+    if (discountId) break;
+  }
+  if (!discountId) {
+    console.error(`Não achou o discount_id do cupom ${couponCode} (${store}) mesmo após retries -- índice da Shopify pode estar atrasado.`);
+    return;
+  }
 
   await supabase.from("members").update({ [column]: discountId }).eq("id", memberId);
 
