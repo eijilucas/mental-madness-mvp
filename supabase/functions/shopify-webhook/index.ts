@@ -393,7 +393,14 @@ Deno.serve(async (req: Request) => {
 
   const rawBody = await req.text();
   const hmacHeader = req.headers.get("x-shopify-hmac-sha256");
-  const topic = req.headers.get("x-shopify-topic") ?? "orders/paid";
+  const rawTopic = req.headers.get("x-shopify-topic");
+  const topic = rawTopic ?? "orders/paid";
+  const shopDomain = req.headers.get("x-shopify-shop-domain");
+
+  // Log incondicional de todo webhook recebido -- sem isso, um evento que
+  // cai no caminho "skipped" (sem log próprio) fica indistinguível de um
+  // evento que nunca chegou, na hora de debugar.
+  console.log(`Webhook recebido: topic="${rawTopic}" shop="${shopDomain}" hasHmac=${Boolean(hmacHeader)}`);
 
   const validHmac = await verifyShopifyHmac(rawBody, hmacHeader);
   if (!validHmac) {
