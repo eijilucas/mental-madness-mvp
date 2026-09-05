@@ -300,13 +300,18 @@ async function linkAndSyncDiscount(memberId: string, couponCode: string, store: 
   // Tenta vários candidatos, não só "qualquer um" -- um molde cujo desconto
   // já foi apagado na Shopify (sobra de teste, por exemplo) devolve lista de
   // coleções vazia sem erro nenhum, e o cupom novo nascia sem coleção
-  // nenhuma, calado (reproduzido com TESTE68 na Exclusivos).
+  // nenhuma, calado (reproduzido com TESTE68 na Exclusivos). Prioriza os
+  // membros MAIS ANTIGOS (created_at asc) como molde -- normalmente são
+  // afiliados de verdade (importados no início), bem menos propensos a
+  // serem apagados de repente do que um cupom de teste recém-criado. A
+  // automação de coleção nova mantém todo mundo em dia de qualquer forma,
+  // então não precisa ser o "mais novo" pra estar atualizado.
   const { data: referenceCandidates } = await supabase
     .from("members")
     .select(column)
     .not(column, "is", null)
     .neq("id", memberId)
-    .order("created_at", { ascending: false })
+    .order("created_at", { ascending: true })
     .limit(5);
 
   let collectionIds: string[] = [];

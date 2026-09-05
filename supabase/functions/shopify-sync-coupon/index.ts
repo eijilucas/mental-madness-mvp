@@ -115,15 +115,24 @@ Deno.serve(async (req: Request) => {
         // criado manualmente na Shopify (fora do nosso sistema) pode nunca
         // ter sido sincronizado com as coleções novas, e usar ele como
         // molde propagaria essa lista incompleta pra todo cupom criado
-        // depois (foi exatamente isso que aconteceu com o TESTE5).
-        const { data: referenceMember } = await adminClient
+        // depois (foi exatamente isso que aconteceu com o TESTE5). Tenta
+        // vários candidatos, priorizando os mais ANTIGOS (afiliados de
+        // verdade, bem menos propensos a serem apagados de repente que um
+        // cupom de teste recém-criado) -- um molde cujo desconto já foi
+        // apagado devolve lista vazia sem erro nenhum (mesma classe de bug
+        // que afetou o TESTE68).
+        const { data: referenceCandidates } = await adminClient
           .from("members")
           .select(DISCOUNT_ID_COLUMN[store])
           .not(DISCOUNT_ID_COLUMN[store], "is", null)
-          .limit(1)
-          .maybeSingle();
-        const referenceId = referenceMember?.[DISCOUNT_ID_COLUMN[store]] as string | undefined;
-        const collectionIds = referenceId ? await getDiscountCollectionIds(config, referenceId) : [];
+          .order("created_at", { ascending: true })
+          .limit(5);
+        let collectionIds: string[] = [];
+        for (const candidate of referenceCandidates ?? []) {
+          const candidateId = candidate[DISCOUNT_ID_COLUMN[store]] as string;
+          collectionIds = await getDiscountCollectionIds(config, candidateId);
+          if (collectionIds.length > 0) break;
+        }
 
         const discountId = await createAffiliateDiscount(config, { code: member.coupon_code, percentage, collectionIds });
         const { error: saveError } = await adminClient.from("members").update({ [DISCOUNT_ID_COLUMN[store]]: discountId }).eq("id", member.id);
