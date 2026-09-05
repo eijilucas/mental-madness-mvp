@@ -297,17 +297,29 @@ async function linkAndSyncDiscount(memberId: string, couponCode: string, store: 
 
   await supabase.from("members").update({ [column]: discountId }).eq("id", memberId);
 
-  const { data: referenceMember } = await supabase
+  // Tenta vários candidatos, não só "qualquer um" -- um molde cujo desconto
+  // já foi apagado na Shopify (sobra de teste, por exemplo) devolve lista de
+  // coleções vazia sem erro nenhum, e o cupom novo nascia sem coleção
+  // nenhuma, calado (reproduzido com TESTE68 na Exclusivos).
+  const { data: referenceCandidates } = await supabase
     .from("members")
     .select(column)
     .not(column, "is", null)
     .neq("id", memberId)
-    .limit(1)
-    .maybeSingle();
-  const referenceId = (referenceMember as Record<string, unknown> | null)?.[column] as string | undefined;
-  if (referenceId) {
-    const collectionIds = await getDiscountCollectionIds(config, referenceId);
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  let collectionIds: string[] = [];
+  for (const candidate of (referenceCandidates ?? []) as Record<string, unknown>[]) {
+    const candidateId = candidate[column] as string;
+    collectionIds = await getDiscountCollectionIds(config, candidateId);
+    if (collectionIds.length > 0) break;
+  }
+
+  if (collectionIds.length > 0) {
     await addCollectionsToDiscount(config, discountId, collectionIds);
+  } else {
+    console.error(`Não achou nenhum molde de coleções válido pra sincronizar o cupom ${couponCode} (${store}) -- todos os candidatos testados estavam vazios/apagados.`);
   }
 }
 
