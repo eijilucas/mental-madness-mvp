@@ -11,6 +11,11 @@
 // Idempotente por external_order_id: reenvio do mesmo pedido nunca duplica
 // a venda, só devolve o resultado anterior.
 //
+// DELETE (mesmo secret): reverte a venda quando o pedido é apagado do
+// Vendas Externas — sem isso, apagar um pedido lá deixava a comissão
+// contando pra sempre pro afiliado, mesmo o pedido não existindo mais.
+// Idempotente: nunca existiu/já foi revertida antes, responde ok sem erro.
+//
 // Deploy:
 //   npx supabase functions deploy register-external-order-sale --project-ref tflxotunokypiakkdyxs
 //   npx supabase secrets set EXTERNAL_ORDER_SALE_SECRET=<secret> --project-ref tflxotunokypiakkdyxs
@@ -36,7 +41,7 @@ Deno.serve(async (req: Request) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
-  if (req.method !== "POST") {
+  if (req.method !== "POST" && req.method !== "DELETE") {
     return jsonResponse({ error: "method_not_allowed" }, 405);
   }
 
@@ -44,6 +49,47 @@ Deno.serve(async (req: Request) => {
   const token = authHeader.replace(/^Bearer\s+/i, "");
   if (!EXPECTED_SECRET || token !== EXPECTED_SECRET) {
     return jsonResponse({ error: "unauthorized" }, 401);
+  }
+
+  if (req.method === "DELETE") {
+    let deleteBody: { external_order_id?: string };
+    try {
+      deleteBody = await req.json();
+    } catch {
+      return jsonResponse({ error: "invalid_json" }, 400);
+    }
+    if (!deleteBody.external_order_id) {
+      return jsonResponse({ error: "external_order_id_required" }, 400);
+    }
+
+    const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+    const { data: sale, error: findError } = await adminClient
+      .from("sales")
+      .select("id")
+      .eq("external_order_id", deleteBody.external_order_id)
+      .maybeSingle();
+
+    if (findError) {
+      console.error("Erro ao buscar venda externa pra reverter:", findError);
+      return jsonResponse({ error: "lookup_failed" }, 500);
+    }
+    if (!sale) {
+      return jsonResponse({ ok: true, deleted: false });
+    }
+
+    // sale_items primeiro — sem FK on delete cascade garantida, mais
+    // seguro apagar explícito na ordem certa do que confiar nisso.
+    const { error: itemsError } = await adminClient.from("sale_items").delete().eq("sale_id", sale.id);
+    if (itemsError) {
+      console.error("Erro ao apagar itens da venda externa:", itemsError);
+      return jsonResponse({ error: "delete_items_failed" }, 500);
+    }
+    const { error: deleteError } = await adminClient.from("sales").delete().eq("id", sale.id);
+    if (deleteError) {
+      console.error("Erro ao apagar venda externa:", deleteError);
+      return jsonResponse({ error: "delete_failed" }, 500);
+    }
+    return jsonResponse({ ok: true, deleted: true });
   }
 
   let body: RequestBody;
