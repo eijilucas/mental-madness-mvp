@@ -87,48 +87,60 @@ interface CollectionEdge {
   node: { id: string };
 }
 
-interface DiscountCollectionsQueryResult {
-  codeDiscountNodes: {
-    edges: {
-      node: {
-        codeDiscount: {
-          customerGets?: {
-            items?: {
-              collections?: { edges: CollectionEdge[] };
-            };
-          };
+interface DiscountByIdQueryResult {
+  codeDiscountNode: {
+    codeDiscount: {
+      customerGets?: {
+        items?: {
+          collections?: { edges: CollectionEdge[] };
         };
       };
-    }[];
-  };
+    };
+  } | null;
 }
 
 /**
- * Busca a lista de coleções do desconto mais recente da loja -- usado como
- * "molde" pra saber em quais coleções um cupom novo deve nascer (todos os
- * cupons de afiliado compartilham as mesmas coleções, mantidas em sincronia
- * pela automação de "coleção nova").
+ * Busca a lista de coleções de UM desconto específico (identificado por
+ * `discountId`) -- usado como "molde" pra saber em quais coleções um cupom
+ * novo deve nascer (todos os cupons de afiliado compartilham as mesmas
+ * coleções, mantidas em sincronia pela automação de "coleção nova").
+ *
+ * Importante: `discountId` precisa ser um desconto que a GENTE controla
+ * (um `members.shopify_discount_id_*` de verdade), não "o desconto mais
+ * recente da loja" — um desconto criado manualmente na Shopify por fora do
+ * nosso sistema pode nunca ter sido sincronizado com coleções novas, e
+ * usar ele como molde propagaria essa lista incompleta pra todo cupom
+ * criado depois.
  */
-export async function getReferenceCollectionIds(config: ShopifyStoreConfig): Promise<string[]> {
-  const data = await shopifyGraphQL<DiscountCollectionsQueryResult>(
+export async function getDiscountCollectionIds(config: ShopifyStoreConfig, discountId: string): Promise<string[]> {
+  const data = await shopifyGraphQL<DiscountByIdQueryResult>(
     config,
-    `{
-      codeDiscountNodes(first: 1, sortKey: CREATED_AT, reverse: true) {
-        edges {
-          node {
-            codeDiscount {
-              ... on DiscountCodeBasic {
-                customerGets { items { ... on DiscountCollections { collections(first: 50) { edges { node { id } } } } } }
-              }
-            }
+    `query($id: ID!) {
+      codeDiscountNode(id: $id) {
+        codeDiscount {
+          ... on DiscountCodeBasic {
+            customerGets { items { ... on DiscountCollections { collections(first: 50) { edges { node { id } } } } } }
           }
         }
       }
     }`,
+    { id: discountId },
   );
-  const edges = data.codeDiscountNodes.edges;
-  if (edges.length === 0) return [];
-  return (edges[0].node.codeDiscount.customerGets?.items?.collections?.edges ?? []).map((e) => e.node.id);
+  return (data.codeDiscountNode?.codeDiscount.customerGets?.items?.collections?.edges ?? []).map((e) => e.node.id);
+}
+
+interface FindDiscountByCodeResult {
+  codeDiscountNodes: { edges: { node: { id: string } }[] };
+}
+
+/** Acha o ID de um desconto pelo código/título exato (case-sensitive na Shopify). */
+export async function findDiscountIdByCode(config: ShopifyStoreConfig, code: string): Promise<string | null> {
+  const data = await shopifyGraphQL<FindDiscountByCodeResult>(
+    config,
+    `query($q: String!) { codeDiscountNodes(first: 1, query: $q) { edges { node { id } } } }`,
+    { q: `title:${code}` },
+  );
+  return data.codeDiscountNodes.edges[0]?.node.id ?? null;
 }
 
 interface CreateDiscountResult {

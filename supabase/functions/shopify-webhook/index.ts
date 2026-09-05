@@ -42,7 +42,7 @@
 // ============================================================================
 
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { addCollectionToDiscount, getStoreConfig, ShopifyGraphQLError, type StoreKey } from "../_shared/shopify.ts";
+import { addCollectionToDiscount, findDiscountIdByCode, getStoreConfig, ShopifyGraphQLError, type StoreKey } from "../_shared/shopify.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -254,7 +254,7 @@ async function handleOrderReversal(orderId: string | number): Promise<Response> 
 // o login junto (senha temporária): o admin pega uma senha nova a qualquer
 // momento clicando em "Resetar senha" na tabela, não precisa guardar a
 // gerada aqui.
-async function handleDiscountCreated(payload: Record<string, unknown>): Promise<Response> {
+async function handleDiscountCreated(payload: Record<string, unknown>, shopDomain: string | null): Promise<Response> {
   const rawCode = extractDiscountCode(payload);
   if (!rawCode) {
     return jsonResponse({ skipped: true, reason: "Payload sem código de cupom identificável" });
@@ -315,6 +315,27 @@ async function handleDiscountCreated(payload: Record<string, unknown>): Promise<
   const { error: linkError } = await supabase.from("members").update({ auth_user_id: created.user.id }).eq("id", member.id);
   if (linkError) {
     console.error("Login criado, mas falhou ao vincular ao membro:", linkError);
+  }
+
+  // Achar e salvar o ID do desconto que a Shopify acabou de criar -- sem
+  // isso, esse cupom fica invisível pra automação de "coleção nova"
+  // (aquele webhook só olha membros com shopify_discount_id_<loja>
+  // preenchido). Best-effort: se falhar, o cupom fica cadastrado normal,
+  // só sem o auto-sync de coleção até alguém rodar o backfill manual.
+  const store = resolveStore(shopDomain);
+  if (store) {
+    const config = getStoreConfig(store);
+    if (config) {
+      try {
+        const discountId = await findDiscountIdByCode(config, couponCode);
+        if (discountId) {
+          const column = store === "basic" ? "shopify_discount_id_basic" : "shopify_discount_id_exclusivos";
+          await supabase.from("members").update({ [column]: discountId }).eq("id", member.id);
+        }
+      } catch (err) {
+        console.error(`Não achou/salvou o discount_id do cupom ${couponCode} (${store}):`, err);
+      }
+    }
   }
 
   return jsonResponse({ ok: true, member_id: member.id, coupon_code: couponCode, login_created: !linkError });
@@ -425,7 +446,7 @@ Deno.serve(async (req: Request) => {
   }
 
   if (topic === "discounts/create" || topic === "discount_codes/create") {
-    return await handleDiscountCreated(payload);
+    return await handleDiscountCreated(payload, req.headers.get("x-shopify-shop-domain"));
   }
 
   if (topic === "collections/create") {

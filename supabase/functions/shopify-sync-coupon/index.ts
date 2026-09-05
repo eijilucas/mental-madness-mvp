@@ -5,9 +5,12 @@
 // eventos DE LÁ pra cá).
 //
 // action "create": membro novo -- cria o desconto na(s) loja(s) escolhida(s),
-//   clonando a lista de coleções do desconto mais recente daquela loja
-//   (todo cupom de afiliado compartilha as mesmas coleções). Salva o ID
-//   retornado em members.shopify_discount_id_<loja>.
+//   clonando a lista de coleções de outro membro JÁ RASTREADO por nós
+//   naquela loja (todo cupom de afiliado compartilha as mesmas coleções,
+//   mantidas em sincronia pela automação de coleção nova). Nunca clona de
+//   "o desconto mais recente da loja" -- um cupom criado manualmente na
+//   Shopify pode nunca ter sido sincronizado. Salva o ID retornado em
+//   members.shopify_discount_id_<loja>.
 // action "rename": cupom do membro mudou -- renomeia (code E title juntos)
 //   em toda loja onde ele já tem um shopify_discount_id salvo.
 //
@@ -22,7 +25,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import {
   createAffiliateDiscount,
-  getReferenceCollectionIds,
+  getDiscountCollectionIds,
   getStoreConfig,
   renameAffiliateDiscount,
   ShopifyGraphQLError,
@@ -107,9 +110,28 @@ Deno.serve(async (req: Request) => {
         continue;
       }
       try {
-        const collectionIds = await getReferenceCollectionIds(config);
+        // Molde vem de um membro NOSSO já rastreado (shopify_discount_id_*
+        // salvo), nunca de "o desconto mais recente da loja" -- um cupom
+        // criado manualmente na Shopify (fora do nosso sistema) pode nunca
+        // ter sido sincronizado com as coleções novas, e usar ele como
+        // molde propagaria essa lista incompleta pra todo cupom criado
+        // depois (foi exatamente isso que aconteceu com o TESTE5).
+        const { data: referenceMember } = await adminClient
+          .from("members")
+          .select(DISCOUNT_ID_COLUMN[store])
+          .not(DISCOUNT_ID_COLUMN[store], "is", null)
+          .limit(1)
+          .maybeSingle();
+        const referenceId = referenceMember?.[DISCOUNT_ID_COLUMN[store]] as string | undefined;
+        const collectionIds = referenceId ? await getDiscountCollectionIds(config, referenceId) : [];
+
         const discountId = await createAffiliateDiscount(config, { code: member.coupon_code, percentage, collectionIds });
-        await adminClient.from("members").update({ [DISCOUNT_ID_COLUMN[store]]: discountId }).eq("id", member.id);
+        const { error: saveError } = await adminClient.from("members").update({ [DISCOUNT_ID_COLUMN[store]]: discountId }).eq("id", member.id);
+        if (saveError) {
+          console.error(`Cupom criado na Shopify (${store}), mas falhou ao salvar o ID no banco:`, saveError);
+          results.push({ store, ok: false, reason: "Criado na Shopify, mas não salvou o vínculo no banco -- avisa o suporte" });
+          continue;
+        }
         results.push({ store, ok: true });
       } catch (err) {
         console.error(`Erro ao criar cupom na Shopify (${store}):`, err);
