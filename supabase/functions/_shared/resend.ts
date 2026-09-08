@@ -20,7 +20,10 @@ export async function sendEmail(params: { to: string; subject: string; html: str
     method: "POST",
     headers: {
       Authorization: `Bearer ${RESEND_API_KEY}`,
-      "Content-Type": "application/json",
+      // "charset=utf-8" explícito -- sem isso, os testes mostraram acento
+      // virando "�" mesmo com <meta charset="utf-8"> no HTML (o meta tag
+      // só ajuda se os BYTES já chegaram certos).
+      "Content-Type": "application/json; charset=utf-8",
     },
     body: JSON.stringify({
       from: FROM_ADDRESS,
