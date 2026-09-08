@@ -1154,6 +1154,7 @@ export function AdminDashboard() {
         {pendingGiftCardRows.length === 0 ? (
           <div className="mm-empty-state">Nenhuma peça pendente de envio pra {formatCycleMonthLabel(selectedMonth)}.</div>
         ) : (
+          <div className="mm-table-hscroll">
           <table className="mm-table">
             <thead>
               <tr>
@@ -1224,6 +1225,7 @@ export function AdminDashboard() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </section>
       </div>

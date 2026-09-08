@@ -614,6 +614,17 @@ input {
   }
 }
 
+/* Tabela larga (muitas colunas) dentro de uma coluna estreita do
+   mm-two-col-grid -- em vez de espremer célula por célula, deixa a tabela
+   com sua largura natural e rola por dentro. */
+.mm-table-hscroll {
+  overflow-x: auto;
+}
+
+.mm-table-hscroll .mm-table {
+  min-width: 620px;
+}
+
 .mm-table td.mm-member-row-name {
   font-weight: 500;
   color: var(--text-primary);
