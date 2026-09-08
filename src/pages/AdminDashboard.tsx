@@ -946,8 +946,7 @@ export function AdminDashboard() {
         <StatCard label="Comissões do Mês" value={currencyFormatter.format(totalCommission)} accent />
       </div>
 
-      <div className="mm-two-col-grid" style={{ marginBottom: 24 }}>
-      <section className="mm-table-section">
+      <section className="mm-table-section" style={{ marginBottom: 24 }}>
         <h2 className="mm-section-title">Pagamento de Comissão (PIX)</h2>
 
         {payoutError && (
@@ -1088,7 +1087,7 @@ export function AdminDashboard() {
         )}
       </section>
 
-      <section className="mm-table-section">
+      <section className="mm-table-section" style={{ marginBottom: 24 }}>
         <h2 className="mm-section-title">Pagamento de Gift Card</h2>
         <div className="mm-label" style={{ marginBottom: 16 }}>
           Substitui o afiliado escolher uma peça física — cria um gift card na Shopify e manda o código por e-mail.
@@ -1228,7 +1227,6 @@ export function AdminDashboard() {
           </div>
         )}
       </section>
-      </div>
 
       <section className="mm-table-section" style={{ marginBottom: 24 }}>
         <h2 className="mm-section-title">Adicionar Venda Manual (WhatsApp)</h2>

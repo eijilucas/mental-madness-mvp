@@ -601,22 +601,9 @@ input {
   }
 }
 
-.mm-two-col-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
-  align-items: start;
-}
-
-@media (max-width: 1100px) {
-  .mm-two-col-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* Tabela larga (muitas colunas) dentro de uma coluna estreita do
-   mm-two-col-grid -- em vez de espremer célula por célula, deixa a tabela
-   com sua largura natural e rola por dentro. */
+/* Tabela larga (muitas colunas) num espaço estreito (mobile, etc.) -- em
+   vez de espremer célula por célula, deixa a tabela com sua largura
+   natural e rola por dentro. */
 .mm-table-hscroll {
   overflow-x: auto;
 }
