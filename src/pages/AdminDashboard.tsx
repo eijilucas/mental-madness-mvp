@@ -974,9 +974,6 @@ export function AdminDashboard() {
             <h3 style={{ margin: "0 0 4px", fontSize: 13, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-label)" }}>
               Comissão do Ciclo Atual (em andamento)
             </h3>
-            <div className="mm-label" style={{ marginBottom: 12 }}>
-              Ainda não fechou pra pagamento (fecha dia 1) — atualiza ao vivo conforme cada afiliado vende.
-            </div>
             {currentMonthEarners.length === 0 ? (
               <div className="mm-empty-state">Ninguém bateu comissão neste ciclo ainda.</div>
             ) : (
@@ -1115,9 +1112,6 @@ export function AdminDashboard() {
             <h3 style={{ margin: "0 0 4px", fontSize: 13, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-label)" }}>
               Peças do Ciclo Atual (em andamento)
             </h3>
-            <div className="mm-label" style={{ marginBottom: 12 }}>
-              Ainda não fechou pra pagamento (fecha dia 1) — atualiza ao vivo conforme cada afiliado vende.
-            </div>
             {currentPieceEarners.length === 0 ? (
               <div className="mm-empty-state">Ninguém ganhou peça neste ciclo ainda.</div>
             ) : (
