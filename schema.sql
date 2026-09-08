@@ -35,6 +35,9 @@ create table if not exists members (
   -- nenhuma sincronizada ainda.
   shopify_discount_id_basic text,
   shopify_discount_id_exclusivos text,
+  -- e-mail real de contato (separado do e-mail sintético de login) -- pra
+  -- onde manda o gift card de recompensa por peça, via Resend.
+  contact_email text,
   created_at timestamptz not null default now()
 );
 

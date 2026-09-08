@@ -601,6 +601,19 @@ input {
   }
 }
 
+.mm-two-col-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .mm-two-col-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .mm-table td.mm-member-row-name {
   font-weight: 500;
   color: var(--text-primary);

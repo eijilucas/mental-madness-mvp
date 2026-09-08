@@ -8,6 +8,7 @@ export interface Member {
   active: boolean;
   pix_key: string | null;
   pix_key_type: "CPF" | "CNPJ" | "EMAIL" | "PHONE" | "EVP" | null;
+  contact_email: string | null;
   created_at: string;
 }
 

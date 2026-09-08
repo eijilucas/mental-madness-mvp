@@ -16,6 +16,13 @@
 // (read_products só é usado pra ler/gravar a lista de coleções de um
 // desconto -- na Shopify, "coleção" fica sob o escopo de Produtos, não tem
 // escopo próprio).
+//
+// Gift card (recompensa por peça, ver supabase/functions/send-gift-card) usa
+// um app SEPARADO, com secrets próprios (mesmo domínio da loja, credencial
+// diferente):
+//   SHOPIFY_GIFTCARD_CLIENT_ID_<LOJA>
+//   SHOPIFY_GIFTCARD_CLIENT_SECRET_<LOJA>
+// Escopo necessário: write_gift_cards.
 // ============================================================================
 
 export const STORE_KEYS = ["basic", "exclusivos"] as const;
@@ -33,6 +40,20 @@ export function getStoreConfig(store: StoreKey): ShopifyStoreConfig | null {
   const domain = Deno.env.get(`SHOPIFY_STORE_DOMAIN_${suffix}`);
   const clientId = Deno.env.get(`SHOPIFY_CLIENT_ID_${suffix}`);
   const clientSecret = Deno.env.get(`SHOPIFY_CLIENT_SECRET_${suffix}`);
+  if (!domain || !clientId || !clientSecret) return null;
+  return { key: store, domain, clientId, clientSecret };
+}
+
+// App SEPARADO, só com o escopo write_gift_cards -- não reaproveita o app de
+// sync (read_discounts/write_discounts/read_products) de propósito, pra não
+// precisar mexer no escopo dele (edição de escopo de app já instalado é
+// conhecida por não pegar na Shopify, ver README). Reaproveita o mesmo
+// SHOPIFY_STORE_DOMAIN_<LOJA> (é a mesma loja, só o app de credencial muda).
+export function getGiftCardStoreConfig(store: StoreKey): ShopifyStoreConfig | null {
+  const suffix = store.toUpperCase();
+  const domain = Deno.env.get(`SHOPIFY_STORE_DOMAIN_${suffix}`);
+  const clientId = Deno.env.get(`SHOPIFY_GIFTCARD_CLIENT_ID_${suffix}`);
+  const clientSecret = Deno.env.get(`SHOPIFY_GIFTCARD_CLIENT_SECRET_${suffix}`);
   if (!domain || !clientId || !clientSecret) return null;
   return { key: store, domain, clientId, clientSecret };
 }
@@ -246,4 +267,41 @@ export async function deleteAffiliateDiscount(config: ShopifyStoreConfig, discou
   );
   const err = firstUserError(data.discountCodeDelete.userErrors);
   if (err && !/not found|does not exist/i.test(err)) throw new ShopifyGraphQLError(err);
+}
+
+interface CreateGiftCardResult {
+  giftCardCreate: {
+    giftCard: { id: string } | null;
+    giftCardCode: string | null;
+    userErrors: { field?: string[] | null; message: string }[];
+  };
+}
+
+/**
+ * Cria um gift card na loja com o valor informado (BRL) -- NÃO manda e-mail
+ * automático da Shopify (sem customerId/recipientAttributes), porque o
+ * e-mail pro afiliado é mandado por fora, via Resend, com o código que essa
+ * function devolve.
+ */
+export async function createGiftCard(
+  config: ShopifyStoreConfig,
+  params: { amount: number; note?: string },
+): Promise<{ code: string; giftCardId: string }> {
+  const data = await shopifyGraphQL<CreateGiftCardResult>(
+    config,
+    `mutation($input: GiftCardCreateInput!) {
+      giftCardCreate(input: $input) {
+        giftCard { id }
+        giftCardCode
+        userErrors { field message }
+      }
+    }`,
+    { input: { initialValue: params.amount.toFixed(2), note: params.note } },
+  );
+  const err = firstUserError(data.giftCardCreate.userErrors);
+  if (err) throw new ShopifyGraphQLError(err);
+  const code = data.giftCardCreate.giftCardCode;
+  const giftCardId = data.giftCardCreate.giftCard?.id;
+  if (!code || !giftCardId) throw new ShopifyGraphQLError("Shopify não devolveu o código do gift card criado");
+  return { code, giftCardId };
 }
