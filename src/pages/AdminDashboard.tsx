@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { currentCycleMonth, formatCycleMonthLabel, nextCycleMonth } from "../lib/date";
-import { SYNTHETIC_LOGIN_DOMAIN } from "../lib/auth";
 import { extractFunctionErrorMessage, invokeAdminFunction } from "../lib/functions";
 import { Header } from "../components/Header";
 import { StatCard } from "../components/StatCard";
@@ -98,85 +97,6 @@ export function AdminDashboard() {
   const nextMonth = nextCycleMonth(selectedMonth);
 
   const [reloadTick, setReloadTick] = useState(0);
-  const [newMemberName, setNewMemberName] = useState("");
-  const [newMemberCoupon, setNewMemberCoupon] = useState("");
-  const [addingMember, setAddingMember] = useState(false);
-  const [addMemberError, setAddMemberError] = useState<string | null>(null);
-
-  const [addMemberResult, setAddMemberResult] = useState<{ coupon: string; password: string } | null>(null);
-  const [newMemberStoreBasic, setNewMemberStoreBasic] = useState(false);
-  const [newMemberStoreExclusivos, setNewMemberStoreExclusivos] = useState(false);
-
-  async function handleAddMember() {
-    setAddMemberError(null);
-    setAddMemberResult(null);
-
-    const name = newMemberName.trim();
-    const coupon = newMemberCoupon.trim().toUpperCase();
-
-    if (!name || !coupon) {
-      setAddMemberError("Preenche nome e cupom.");
-      return;
-    }
-
-    setAddingMember(true);
-    const { data: created, error } = await supabase
-      .from("members")
-      .insert({ name, coupon_code: coupon, email: `${coupon.toLowerCase()}@${SYNTHETIC_LOGIN_DOMAIN}` })
-      .select("id")
-      .single();
-
-    if (error) {
-      setAddingMember(false);
-      setAddMemberError(error.code === "23505" ? `Já existe um membro com o cupom "${coupon}".` : "Não deu pra cadastrar. Tenta de novo.");
-      return;
-    }
-
-    // Já cria o login na hora, sem precisar rodar script pelo terminal.
-    const { data: loginData, error: loginError } = await invokeAdminFunction("create-member-login", {
-      member_id: created.id,
-    });
-
-    // E já cria o cupom nas lojas Shopify marcadas, se alguma foi marcada.
-    const stores: ("basic" | "exclusivos")[] = [
-      ...(newMemberStoreBasic ? (["basic"] as const) : []),
-      ...(newMemberStoreExclusivos ? (["exclusivos"] as const) : []),
-    ];
-    let shopifyWarning: string | null = null;
-    if (stores.length > 0) {
-      const { data: shopifyData, error: shopifyError } = await invokeAdminFunction("shopify-sync-coupon", {
-        member_id: created.id,
-        action: "create",
-        stores,
-      });
-      if (shopifyError || shopifyData?.error) {
-        shopifyWarning = (await extractFunctionErrorMessage(shopifyError, shopifyData)) ?? "Não deu pra criar o cupom na Shopify.";
-      } else {
-        const failed = (shopifyData?.results ?? []).filter((r: { ok: boolean }) => !r.ok);
-        if (failed.length > 0) {
-          shopifyWarning = `Cupom não criado em: ${failed.map((r: { store: string; reason?: string }) => `${r.store}${r.reason ? ` (${r.reason})` : ""}`).join(", ")}.`;
-        }
-      }
-    }
-
-    setAddingMember(false);
-    setNewMemberName("");
-    setNewMemberCoupon("");
-    setNewMemberStoreBasic(false);
-    setNewMemberStoreExclusivos(false);
-    setReloadTick((t) => t + 1);
-
-    if (loginError || loginData?.error) {
-      const reason = await extractFunctionErrorMessage(loginError, loginData);
-      setAddMemberError(
-        `Membro cadastrado, mas não deu pra criar o login automaticamente${reason ? `: ${reason}` : ""}. Tenta "Criar login" na tabela.`,
-      );
-      return;
-    }
-
-    if (shopifyWarning) setAddMemberError(shopifyWarning);
-    setAddMemberResult({ coupon: loginData.coupon_code, password: loginData.temp_password });
-  }
 
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -397,46 +317,6 @@ export function AdminDashboard() {
     setManualSaleMemberId("");
     setManualSaleAmount("");
     setManualSaleProduct("");
-    setReloadTick((t) => t + 1);
-  }
-
-  const [bulkLoginPassword, setBulkLoginPassword] = useState("mentalmadness2026");
-  const [creatingBulkLogins, setCreatingBulkLogins] = useState(false);
-  const [bulkLoginResult, setBulkLoginResult] = useState<string | null>(null);
-  const [bulkLoginError, setBulkLoginError] = useState<string | null>(null);
-
-  async function handleBulkCreateLogins() {
-    setBulkLoginError(null);
-    setBulkLoginResult(null);
-
-    const password = bulkLoginPassword.trim();
-    if (password.length < 6) {
-      setBulkLoginError("Senha temporária precisa ter pelo menos 6 caracteres.");
-      return;
-    }
-
-    setCreatingBulkLogins(true);
-    const { data, error } = await invokeAdminFunction("bulk-create-logins", { temp_password: password });
-    setCreatingBulkLogins(false);
-
-    if (error || data?.error) {
-      setBulkLoginError((await extractFunctionErrorMessage(error, data)) ?? "Não deu pra criar os logins. Tenta de novo.");
-      return;
-    }
-
-    const results = (data?.results ?? []) as { coupon_code: string; name: string; ok: boolean; reason?: string }[];
-    const okCount = results.filter((r) => r.ok).length;
-    const failed = results.filter((r) => !r.ok);
-
-    if (results.length === 0) {
-      setBulkLoginResult("Nenhum membro pendente de login — todo mundo já tem conta.");
-    } else {
-      setBulkLoginResult(
-        `${okCount} login(s) criado(s) com a senha "${password}".` +
-          (failed.length > 0 ? ` Falhou pra: ${failed.map((f) => `${f.coupon_code}${f.reason ? ` (${f.reason})` : ""}`).join(", ")}.` : ""),
-      );
-    }
-
     setReloadTick((t) => t + 1);
   }
 
@@ -1269,119 +1149,6 @@ export function AdminDashboard() {
 
           <button type="button" className="mm-config-save-btn" disabled={addingManualSale} onClick={handleAddManualSale}>
             {addingManualSale ? "Registrando..." : "Registrar Venda"}
-          </button>
-        </div>
-      </section>
-
-      <section className="mm-table-section" style={{ marginBottom: 24 }}>
-        <h2 className="mm-section-title">Adicionar Membro</h2>
-
-        {addMemberResult && (
-          <div className="mm-reset-banner">
-            Membro <strong>{addMemberResult.coupon}</strong> criado com login. Senha temporária:{" "}
-            <strong>{addMemberResult.password}</strong> (vai pedir pra trocar no primeiro login).
-            <button type="button" className="mm-link-btn" onClick={() => setAddMemberResult(null)}>
-              Fechar
-            </button>
-          </div>
-        )}
-        {addMemberError && (
-          <div className="mm-reset-banner mm-reset-banner-error">
-            {addMemberError}
-            <button type="button" className="mm-link-btn" onClick={() => setAddMemberError(null)}>
-              Fechar
-            </button>
-          </div>
-        )}
-
-        <div className="mm-config-grid">
-          <div className="mm-field">
-            <label className="mm-label" htmlFor="new-member-name">
-              Nome
-            </label>
-            <input
-              id="new-member-name"
-              type="text"
-              value={newMemberName}
-              onChange={(e) => setNewMemberName(e.target.value)}
-            />
-          </div>
-
-          <div className="mm-field">
-            <label className="mm-label" htmlFor="new-member-coupon">
-              Cupom
-            </label>
-            <input
-              id="new-member-coupon"
-              type="text"
-              value={newMemberCoupon}
-              onChange={(e) => setNewMemberCoupon(e.target.value)}
-            />
-          </div>
-
-          <div className="mm-field">
-            <label className="mm-label">Criar cupom na Shopify</label>
-            <div style={{ display: "flex", gap: 16, height: 42, alignItems: "center" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                <input type="checkbox" checked={newMemberStoreBasic} onChange={(e) => setNewMemberStoreBasic(e.target.checked)} />
-                Basic
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={newMemberStoreExclusivos}
-                  onChange={(e) => setNewMemberStoreExclusivos(e.target.checked)}
-                />
-                Exclusivos
-              </label>
-            </div>
-          </div>
-
-          <button type="button" className="mm-config-save-btn" disabled={addingMember} onClick={handleAddMember}>
-            {addingMember ? "Adicionando..." : "Adicionar"}
-          </button>
-        </div>
-      </section>
-
-      <section className="mm-table-section" style={{ marginBottom: 24 }}>
-        <h2 className="mm-section-title">Criar Login para Pendentes</h2>
-        <div className="mm-label" style={{ marginBottom: 16 }}>
-          Cria conta de login com a mesma senha temporária pra todo membro ativo que ainda não tem uma (útil depois de
-          importar cupons em massa).
-        </div>
-
-        {bulkLoginResult && (
-          <div className="mm-reset-banner">
-            {bulkLoginResult}
-            <button type="button" className="mm-link-btn" onClick={() => setBulkLoginResult(null)}>
-              Fechar
-            </button>
-          </div>
-        )}
-        {bulkLoginError && (
-          <div className="mm-reset-banner mm-reset-banner-error">
-            {bulkLoginError}
-            <button type="button" className="mm-link-btn" onClick={() => setBulkLoginError(null)}>
-              Fechar
-            </button>
-          </div>
-        )}
-
-        <div className="mm-config-grid">
-          <div className="mm-field">
-            <label className="mm-label" htmlFor="bulk-login-password">
-              Senha temporária
-            </label>
-            <input
-              id="bulk-login-password"
-              type="text"
-              value={bulkLoginPassword}
-              onChange={(e) => setBulkLoginPassword(e.target.value)}
-            />
-          </div>
-
-          <button type="button" className="mm-config-save-btn" disabled={creatingBulkLogins} onClick={handleBulkCreateLogins}>
-            {creatingBulkLogins ? "Criando..." : "Criar Logins Pendentes"}
           </button>
         </div>
       </section>
