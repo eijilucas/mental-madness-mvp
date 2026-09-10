@@ -40,12 +40,17 @@ export interface Cycle {
   sales_count: number;
   gross_total: number;
   net_total: number;
-  pieces_earned: number;
   commission_amount: number;
-  pieces_delivered_count: number;
-  pieces_delivered_at: string | null;
   commission_paid: boolean;
   commission_paid_at: string | null;
+  // Gift card acumulado por metas de venda no mês (3/5/7/10/15 vendas).
+  // gift_card_sent / _at / _code / _store = controle de envio, não mexido
+  // pelo recálculo do ciclo.
+  gift_card_value: number;
+  gift_card_sent: boolean;
+  gift_card_sent_at: string | null;
+  gift_card_code: string | null;
+  gift_card_store: "basic" | "exclusivos" | null;
   updated_at: string;
 }
 
@@ -57,6 +62,5 @@ export interface AppConfig {
   id: number;
   commission_base: "gross" | "net";
   commission_rate: number;
-  drop_piece_count: number;
   updated_at: string;
 }

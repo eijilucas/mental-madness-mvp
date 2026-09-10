@@ -106,19 +106,21 @@ create table if not exists cycles (
   sales_count integer not null default 0,
   gross_total numeric(12,2) not null default 0,
   net_total numeric(12,2) not null default 0,
-  pieces_earned integer not null default 0,
   commission_amount numeric(12,2) not null default 0,
-  -- Controle manual do admin (não mexido pelo trigger de recálculo): quantas
-  -- das `pieces_earned` já foram entregues fisicamente. Não é um booleano
-  -- porque as peças vão sendo conquistadas aos poucos ao longo do mês (5
-  -- vendas = 1 peça, depois mais 5 = outra, etc.) — o admin vai entregando e
-  -- incrementando conforme manda cada remessa, não tudo de uma vez só.
-  pieces_delivered_count integer not null default 0 check (pieces_delivered_count >= 0),
-  pieces_delivered_at timestamptz, -- data da última entrega registrada
-  -- Pagamento de comissão via PIX (dia 5) — o crédito fica no app do
-  -- Mercado Pago, aqui só controla quem já foi pago.
+  -- Pagamento de comissão via PIX (dia 5) — o crédito fica na conta do
+  -- Asaas, aqui só controla quem já foi pago.
   commission_paid boolean not null default false,
   commission_paid_at timestamptz,
+  -- Recompensa por meta de venda no mês, ACUMULATIVA (calculada pelo
+  -- trigger, ver calculate_cycle_rewards): 3 vendas -> R$100, 5 -> +R$150,
+  -- 7 -> +R$150, 10 -> +R$250, 15 -> +R$400 (trava: 15+ = R$1.050). Um
+  -- único gift card por membro no fechamento do mês. gift_card_sent / _at /
+  -- _code / _store = controle de envio, NÃO mexido pelo recálculo.
+  gift_card_value numeric(12,2) not null default 0,
+  gift_card_sent boolean not null default false,
+  gift_card_sent_at timestamptz,
+  gift_card_code text,
+  gift_card_store text check (gift_card_store in ('basic', 'exclusivos')),
   updated_at timestamptz not null default now(),
   unique (member_id, cycle_month)
 );
@@ -139,13 +141,7 @@ create table if not exists app_config (
   -- 'gross' = sobre o valor bruto vendido no mês (decisão provisória do cliente)
   -- 'net'   = sobre o valor líquido (requer preencher sales.net_amount)
   commission_base text not null default 'gross' check (commission_base in ('gross', 'net')),
-  commission_rate numeric(5,4) not null default 0.05, -- 5% fixo ao passar de 15 vendas
-  -- Quantidade de peças ganhas ao passar de 15 vendas: "todas as peças do
-  -- drop atual" (decisão do cliente em 2026-08-09). Varia de drop pra drop
-  -- (geralmente 3 a 5 peças, não é o catálogo geral da loja) — o MVP ainda
-  -- não sincroniza isso com a Shopify, então é manual: atualizem aqui toda
-  -- vez que o drop mudar. Valor em 2026-08-09: 5.
-  drop_piece_count integer not null default 5 check (drop_piece_count >= 0),
+  commission_rate numeric(5,4) not null default 0.05, -- 5% fixo, a partir de 6 vendas
   updated_at timestamptz not null default now()
 );
 
@@ -156,53 +152,49 @@ insert into app_config (id) values (1) on conflict (id) do nothing;
 -- Núcleo da regra de negócio. Isolada nesta função para ser fácil de trocar
 -- caso as regras mudem — nada mais no schema precisa ser alterado.
 --
--- Regras (ver README.md para a explicação completa):
---   5 vendas  -> 1 peça (a cada 5, enquanto < 15)
---   6 vendas  -> comissão de `commission_rate` (5% fixo) já fica ativa,
---                sobre o valor vendido no mês inteiro (bruto ou líquido,
---                conforme app_config.commission_base) — decisão do cliente
---                em 2026-08-14, pra facilitar (antes só ativava em 15).
---   15 vendas -> todas as peças do drop atual (app_config.drop_piece_count)
---                + comissão (que já estava ativa desde 6). A mesma taxa
---                vale pra quem passa de 30 — não existe mais um tier de
---                comissão maior a partir de 30 (decisão do cliente em
---                2026-08-09; antes era 10% só a partir de 30 vendas).
+-- Regras (decisão do cliente em 2026-09-10):
+--   Gift card ACUMULATIVO por vendas no mês (soma ao longo do mês, um único
+--   gift card no fechamento):
+--     3 vendas  -> R$ 100
+--     5 vendas  -> + R$ 150
+--     7 vendas  -> + R$ 150
+--     10 vendas -> + R$ 250
+--     15 vendas -> + R$ 400   (trava aqui: 15+ = R$ 1.050 no total)
+--   Comissão: `commission_rate` (5% fixo) a partir de 6 vendas, sobre o
+--   valor vendido no mês inteiro (bruto ou líquido, conforme
+--   app_config.commission_base). Sem mudança em relação a antes.
 -- ----------------------------------------------------------------------------
 create or replace function calculate_cycle_rewards(
   p_sales_count integer,
   p_gross_total numeric,
   p_net_total numeric
 )
-returns table (pieces_earned integer, commission_amount numeric)
+returns table (gift_card_value numeric, commission_amount numeric)
 language plpgsql
 stable
 as $$
 declare
   v_base text;
   v_rate numeric;
-  v_drop_pieces integer;
-  v_pieces integer := 0;
+  v_gift_card numeric := 0;
   v_commission numeric := 0;
   v_commission_base_amount numeric;
 begin
-  select commission_base, commission_rate, drop_piece_count
-    into v_base, v_rate, v_drop_pieces
+  select commission_base, commission_rate
+    into v_base, v_rate
     from app_config where id = 1;
 
   v_commission_base_amount := case when v_base = 'net' then coalesce(p_net_total, 0) else p_gross_total end;
 
-  if p_sales_count >= 15 then
-    v_pieces := v_drop_pieces;
-    v_commission := round(v_commission_base_amount * v_rate, 2);
-  elsif p_sales_count >= 5 then
-    v_pieces := floor(p_sales_count / 5)::integer;
-    v_commission := case when p_sales_count >= 6 then round(v_commission_base_amount * v_rate, 2) else 0 end;
-  else
-    v_pieces := 0;
-    v_commission := 0;
-  end if;
+  if p_sales_count >= 3 then v_gift_card := v_gift_card + 100; end if;
+  if p_sales_count >= 5 then v_gift_card := v_gift_card + 150; end if;
+  if p_sales_count >= 7 then v_gift_card := v_gift_card + 150; end if;
+  if p_sales_count >= 10 then v_gift_card := v_gift_card + 250; end if;
+  if p_sales_count >= 15 then v_gift_card := v_gift_card + 400; end if;
 
-  return query select v_pieces, v_commission;
+  v_commission := case when p_sales_count >= 6 then round(v_commission_base_amount * v_rate, 2) else 0 end;
+
+  return query select v_gift_card, v_commission;
 end;
 $$;
 
@@ -229,14 +221,14 @@ begin
 
   select * into v_rewards from calculate_cycle_rewards(v_count, v_gross, v_net);
 
-  insert into cycles (member_id, cycle_month, sales_count, gross_total, net_total, pieces_earned, commission_amount, updated_at)
-  values (p_member_id, p_cycle_month, v_count, v_gross, v_net, v_rewards.pieces_earned, v_rewards.commission_amount, now())
+  insert into cycles (member_id, cycle_month, sales_count, gross_total, net_total, gift_card_value, commission_amount, updated_at)
+  values (p_member_id, p_cycle_month, v_count, v_gross, v_net, v_rewards.gift_card_value, v_rewards.commission_amount, now())
   on conflict (member_id, cycle_month)
   do update set
     sales_count = excluded.sales_count,
     gross_total = excluded.gross_total,
     net_total = excluded.net_total,
-    pieces_earned = excluded.pieces_earned,
+    gift_card_value = excluded.gift_card_value,
     commission_amount = excluded.commission_amount,
     updated_at = now();
 end;
@@ -273,10 +265,10 @@ for each row execute function trg_sales_recalc_cycle();
 -- ----------------------------------------------------------------------------
 -- FUNÇÃO: recalc_all_cycles_for_month
 -- Recalcula todos os ciclos de um mês de uma vez. Usada pelo painel admin
--- depois de editar app_config (comissão/peças do drop) — sem isso, a
--- mudança só valeria a partir da próxima venda de cada membro, o que ia
--- confundir (`security definer` porque precisa ler/escrever `cycles` de
--- todo mundo, mas só executa se quem chamou for admin).
+-- depois de editar app_config (comissão) — sem isso, a mudança só valeria
+-- a partir da próxima venda de cada membro, o que ia confundir
+-- (`security definer` porque precisa ler/escrever `cycles` de todo mundo,
+-- mas só executa se quem chamou for admin).
 -- ----------------------------------------------------------------------------
 create or replace function recalc_all_cycles_for_month(p_cycle_month date)
 returns void
@@ -372,9 +364,9 @@ create policy cycles_select_own_or_admin on cycles
     or is_admin_user()
   );
 
--- cycles: só admin pode atualizar (usado pelo botão "Peças entregues" no
--- painel admin — o front só manda pieces_delivered/pieces_delivered_at,
--- mas a policy libera a linha toda porque é um admin autenticado e confiável).
+-- cycles: só admin pode atualizar. Hoje a marcação de gift_card_sent e
+-- commission_paid vem por Edge Function (service role, que ignora RLS),
+-- mas a policy fica pra qualquer ajuste manual futuro pelo painel.
 drop policy if exists cycles_update_admin on cycles;
 create policy cycles_update_admin on cycles
   for update using (is_admin_user()) with check (is_admin_user());

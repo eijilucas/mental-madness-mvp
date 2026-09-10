@@ -6,15 +6,10 @@ import { currentCycleMonth } from "../lib/date";
 import { Header } from "../components/Header";
 import { StatCard } from "../components/StatCard";
 import { CycleProgress } from "../components/CycleProgress";
-import { LifetimeProgress } from "../components/LifetimeProgress";
 import { MonthSelector } from "../components/MonthSelector";
-import type { AppConfig, Cycle } from "../types";
+import type { Cycle } from "../types";
 
 const currencyFormatter = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
-const DEFAULT_APP_CONFIG: Pick<AppConfig, "drop_piece_count" | "commission_rate"> = {
-  drop_piece_count: 0,
-  commission_rate: 0,
-};
 
 export function MemberDashboard() {
   const { member, signOut } = useAuth();
@@ -22,7 +17,7 @@ export function MemberDashboard() {
   const [totalSales, setTotalSales] = useState(0);
   const [availableMonths, setAvailableMonths] = useState<string[]>([currentCycleMonth()]);
   const [selectedMonth, setSelectedMonth] = useState(currentCycleMonth());
-  const [appConfig, setAppConfig] = useState(DEFAULT_APP_CONFIG);
+  const [commissionRate, setCommissionRate] = useState(0);
 
   useEffect(() => {
     if (!member) return;
@@ -43,11 +38,11 @@ export function MemberDashboard() {
     function loadConfig() {
       supabase
         .from("app_config")
-        .select("drop_piece_count, commission_rate")
+        .select("commission_rate")
         .eq("id", 1)
         .maybeSingle()
         .then(({ data }) => {
-          if (data) setAppConfig(data);
+          if (data) setCommissionRate(data.commission_rate);
         });
     }
 
@@ -100,10 +95,10 @@ export function MemberDashboard() {
   if (!member) return null;
 
   const salesCount = cycle?.sales_count ?? 0;
-  const piecesEarned = cycle?.pieces_earned ?? 0;
+  const giftCardValue = cycle?.gift_card_value ?? 0;
   const commission = cycle?.commission_amount ?? 0;
   const isCurrentMonth = selectedMonth === currentCycleMonth();
-  const dropCompleted = appConfig.drop_piece_count > 0 && piecesEarned >= appConfig.drop_piece_count;
+  const maxReached = salesCount >= 15;
 
   return (
     <div className="mm-app-frame">
@@ -111,7 +106,7 @@ export function MemberDashboard() {
         memberName={member.name}
         couponCode={member.coupon_code}
         onSignOut={signOut}
-        celebrate={isCurrentMonth && dropCompleted}
+        celebrate={isCurrentMonth && maxReached}
         rightSlot={
           member.is_admin ? (
             <Link to="/admin" className="mm-link-btn">
@@ -128,26 +123,22 @@ export function MemberDashboard() {
 
       <div className="mm-stat-grid">
         <StatCard label="Vendas no Mês" value={String(salesCount)} />
-        <StatCard label="Peças Conquistadas" value={String(piecesEarned)} accent />
+        <StatCard label="Gift Card Acumulado" value={currencyFormatter.format(giftCardValue)} accent />
         <StatCard label="Comissão Acumulada" value={currencyFormatter.format(commission)} accent />
         <StatCard label="Vendas na Carreira" value={String(totalSales)} accent />
       </div>
 
-      {piecesEarned > 0 && (
-        <div className={`mm-delivery-status${(cycle?.pieces_delivered_count ?? 0) >= piecesEarned ? " mm-delivery-status-done" : ""}`}>
-          {(cycle?.pieces_delivered_count ?? 0) >= piecesEarned
-            ? "Todas as peças já foram entregues"
-            : `${cycle?.pieces_delivered_count ?? 0} de ${piecesEarned} peças entregues`}
+      {giftCardValue > 0 && (
+        <div className={`mm-delivery-status${cycle?.gift_card_sent ? " mm-delivery-status-done" : ""}`}>
+          {cycle?.gift_card_sent
+            ? `Gift card de ${currencyFormatter.format(giftCardValue)} já foi enviado por e-mail`
+            : isCurrentMonth
+              ? `Gift card de ${currencyFormatter.format(giftCardValue)} acumulado — enviado no fechamento do mês`
+              : `Gift card de ${currencyFormatter.format(giftCardValue)} pendente de envio`}
         </div>
       )}
 
-      <CycleProgress
-        salesCount={salesCount}
-        dropPieceCount={appConfig.drop_piece_count}
-        commissionRate={appConfig.commission_rate}
-      />
-
-      <LifetimeProgress totalSales={totalSales} dropCompleted={dropCompleted} />
+      <CycleProgress salesCount={salesCount} commissionRate={commissionRate} />
     </div>
   );
 }

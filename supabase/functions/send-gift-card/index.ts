@@ -1,10 +1,13 @@
 // ============================================================================
 // Edge Function: send-gift-card
-// Chamada pelo painel admin ("Enviar Gift Card") -- substitui o afiliado
-// escolher uma peça física: cria um gift card na loja escolhida no valor
-// digitado pelo admin, e manda o código por e-mail (Resend) pro e-mail de
-// contato do membro. Depois de enviar com sucesso, marca as peças pendentes
-// daquele ciclo como entregues (mesmo efeito do stepper manual de entrega).
+// Chamada pelo painel admin ("Enviar Gift Card"), no fechamento do mês --
+// recompensa por meta de venda (3/5/7/10/15 vendas, acumulativo). O valor
+// vem do ciclo (cycles.gift_card_value), o admin NÃO digita -- só escolhe a
+// loja e confirma. Cria o gift card na Shopify, manda o código por e-mail
+// (Resend) pro members.contact_email, e marca cycles.gift_card_sent.
+//
+// Só ciclo já fechado (mês anterior) -- se ainda tá aberto, recusa (o valor
+// ainda pode subir). Um único gift card por membro/mês.
 //
 // Não usa o e-mail sintético de login (members.email) -- precisa do
 // members.contact_email (endereço de verdade do afiliado).
@@ -263,20 +266,17 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Só admin pode enviar gift card" }, 403);
   }
 
-  let body: { member_id?: string; cycle_id?: string; store?: StoreKey; amount?: number };
+  let body: { member_id?: string; cycle_id?: string; store?: StoreKey };
   try {
     body = await req.json();
   } catch {
     return jsonResponse({ error: "JSON inválido" }, 400);
   }
 
-  const { member_id, cycle_id, store, amount } = body;
+  const { member_id, cycle_id, store } = body;
 
   if (!member_id || !cycle_id || !store || !STORE_KEYS.includes(store)) {
     return jsonResponse({ error: "member_id, cycle_id e store são obrigatórios" }, 400);
-  }
-  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
-    return jsonResponse({ error: "amount precisa ser um número maior que zero" }, 400);
   }
 
   const { data: member, error: memberError } = await adminClient
@@ -291,11 +291,27 @@ Deno.serve(async (req: Request) => {
 
   const { data: cycle, error: cycleError } = await adminClient
     .from("cycles")
-    .select("id, member_id, pieces_earned, pieces_delivered_count")
+    .select("id, member_id, cycle_month, gift_card_value, gift_card_sent")
     .eq("id", cycle_id)
     .maybeSingle();
   if (cycleError || !cycle || cycle.member_id !== member_id) {
     return jsonResponse({ error: "Ciclo não encontrado" }, 404);
+  }
+  if (cycle.gift_card_sent) {
+    return jsonResponse({ error: "O gift card desse ciclo já foi enviado" }, 400);
+  }
+
+  // Valor NÃO vem do request -- é o que o ciclo acumulou pelas metas.
+  const amount = Number(cycle.gift_card_value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return jsonResponse({ error: "Esse ciclo não tem valor de gift card a enviar" }, 400);
+  }
+
+  // Só mês fechado (evita mandar antes do ciclo terminar de acumular).
+  const now = new Date();
+  const currentCycleMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  if (cycle.cycle_month >= currentCycleMonth) {
+    return jsonResponse({ error: "Esse ciclo ainda não fechou — o gift card só sai no fechamento do mês" }, 400);
   }
 
   const config = getGiftCardStoreConfig(store);
@@ -307,7 +323,7 @@ Deno.serve(async (req: Request) => {
   try {
     giftCard = await createGiftCard(config, {
       amount,
-      note: `Recompensa de peça -- ${member.name} (cupom, ciclo ${cycle_id})`,
+      note: `Recompensa por meta -- ${member.name} (${cycle.cycle_month})`,
     });
   } catch (err) {
     console.error("Erro ao criar gift card na Shopify:", err);
@@ -322,18 +338,24 @@ Deno.serve(async (req: Request) => {
     });
   } catch (err) {
     console.error("Gift card criado, mas falhou ao mandar o e-mail:", err);
+    // Ainda marca como enviado -- o gift card existe na Shopify, só o
+    // e-mail falhou; o admin copia o código da resposta e manda manual.
+    await adminClient
+      .from("cycles")
+      .update({ gift_card_sent: true, gift_card_sent_at: new Date().toISOString(), gift_card_code: giftCard.code, gift_card_store: store })
+      .eq("id", cycle.id);
     return jsonResponse(
-      { error: "Gift card criado na Shopify, mas não deu pra mandar o e-mail. Copia o código manualmente e manda pro afiliado.", code: giftCard.code },
+      { error: "Gift card criado na Shopify, mas não deu pra mandar o e-mail. Copia o código e manda pro afiliado.", code: giftCard.code },
       500,
     );
   }
 
   const { error: updateError } = await adminClient
     .from("cycles")
-    .update({ pieces_delivered_count: cycle.pieces_earned, pieces_delivered_at: new Date().toISOString() })
+    .update({ gift_card_sent: true, gift_card_sent_at: new Date().toISOString(), gift_card_code: giftCard.code, gift_card_store: store })
     .eq("id", cycle.id);
   if (updateError) {
-    console.error("Gift card enviado, mas falhou ao marcar peças como entregues:", updateError);
+    console.error("Gift card enviado, mas falhou ao marcar gift_card_sent:", updateError);
   }
 
   return jsonResponse({ ok: true, code: giftCard.code });

@@ -100,6 +100,9 @@ interface ShopifyOrderPayload {
   // fallback: algumas lojas registram o cupom em discount_applications em vez de discount_codes
   discount_applications?: { code?: string; title?: string }[];
   line_items?: ShopifyLineItem[];
+  // Gateways usados no pagamento -- inclui "gift_card" (total ou parcial)
+  // quando o cliente pagou com crédito da loja.
+  payment_gateway_names?: string[];
 }
 
 // Payload de refunds/create não é o pedido, é o reembolso — o id do pedido
@@ -178,11 +181,22 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
+// Pedido pago (total ou parcialmente) com gift card = crédito da loja, não
+// venda "de verdade" -- não conta pro cupom do afiliado (ele podia usar o
+// próprio gift card ou o de um terceiro só pra inflar as métricas).
+function paidWithGiftCard(order: ShopifyOrderPayload): boolean {
+  return (order.payment_gateway_names ?? []).some((g) => /gift.?card/i.test(g));
+}
+
 async function handleOrderPaid(order: ShopifyOrderPayload): Promise<Response> {
   const couponCode = extractCouponCode(order);
   if (!couponCode) {
     // Pedido pago sem cupom de afiliado: não é erro, só não gera comissão.
     return jsonResponse({ skipped: true, reason: "Pedido sem cupom de afiliado" });
+  }
+
+  if (paidWithGiftCard(order)) {
+    return jsonResponse({ skipped: true, reason: "Pedido pago com gift card (crédito da loja) — não conta como venda" });
   }
 
   const { data: member, error: memberError } = await supabase

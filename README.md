@@ -2,7 +2,7 @@
 
 MVP do sistema de comissionamento de afiliados da Mental Madness. Membros têm
 um cupom próprio na Shopify; cada venda com o cupom conta para o ciclo mensal
-do membro (reseta todo dia 1) e gera peças de roupa e/ou comissão conforme as
+do membro (reseta todo dia 1) e gera gift card e/ou comissão conforme as
 faixas do mês.
 
 ## Stack
@@ -16,67 +16,84 @@ faixas do mês.
 
 ## Regra de negócio (ciclo mensal, reseta todo dia 1)
 
-| Vendas no mês | Recompensa |
-|---|---|
-| 5 | 1 peça de roupa |
-| 6 | comissão de 5% já fica ativa, sobre o valor vendido no mês inteiro |
-| 10 | 2 peças (comissão continua) |
-| passando de 15 | todas as peças do drop atual + comissão |
-| passando de 30 | comissão (sem mudança nas peças, só reforça visualmente) |
+**Gift card — acumulativo**, soma ao longo do mês, um único gift card no
+fechamento:
 
-> Atualizado em 2026-08-14: comissão de 5% passa a ativar a partir de **6
-> vendas** (antes só a partir de 15), pra facilitar — decisão do cliente. A
-> base de cálculo continua a mesma (valor total vendido no mês, não só as
-> vendas a partir da 6ª). Peças continuam exatamente na mesma regra de
-> antes (5 → 1, 10 → 2, 15+ → todas do drop).
+| Vendas no mês | Gift card |
+|---|---|
+| 3 | R$ 100 |
+| 5 | + R$ 150 (total R$ 250) |
+| 7 | + R$ 150 (total R$ 400) |
+| 10 | + R$ 250 (total R$ 650) |
+| 15+ | + R$ 400 (total R$ 1.050 — trava aqui) |
+
+**Comissão** — 5% fixo a partir de **6 vendas**, sobre o valor vendido no
+mês inteiro (não só a partir da 6ª). Independente do gift card.
+
+> Atualizado em 2026-09-10: a recompensa por meta deixou de ser "peça
+> física" (o afiliado escolhia uma peça e a gente mandava) e passou a ser
+> **gift card por valor**, criado na Shopify e mandado por e-mail no
+> fechamento do mês (ver seção "Recompensa por gift card" abaixo). Todo o
+> mecanismo de peças (contador de entrega, "Peças a Entregar", campo "Peças
+> do drop atual" em Configurações) foi removido. A comissão fixa não mudou.
 >
-> Atualizado em 2026-08-09: antes, só quem passava de 30 vendas ganhava
-> comissão (10%), e o prêmio de peças era um número fixo (3). O cliente
-> decidiu simplificar duas coisas: (1) a comissão de 5% já entrava a partir
-> de 15 vendas, sem taxa maior a partir de 30 (30 continua marcado no
-> painel só por fazer parte da identidade visual aprovada, mas não muda
-> mais o prêmio); (2) o prêmio de peças passa a ser "uma unidade de cada
-> produto ativo no drop atual" em vez de um número fixo.
+> Atualizado em 2026-08-14: comissão de 5% passa a ativar a partir de 6
+> vendas (antes só a partir de 15).
 
 Toda a lógica está isolada na função SQL `calculate_cycle_rewards` em
-[`schema.sql`](schema.sql) — é o único lugar que precisa mudar se a regra
-mudar de novo.
+[`schema.sql`](schema.sql) — é o único lugar (junto de
+`src/lib/rewards.ts` no front) que precisa mudar se a regra mudar de novo.
+
+Vendas pagas com **gift card** (total ou parcial) NÃO contam pro cupom do
+afiliado — o webhook `orders/paid` checa `payment_gateway_names` e pula
+qualquer pedido que usou crédito da loja (ver
+[`supabase/functions/shopify-webhook`](supabase/functions/shopify-webhook)).
 
 O "valor vendido" usado pra calcular a comissão é `subtotal_price` do
 pedido Shopify — já vem com o desconto do cupom aplicado, mas **sem** frete
 e **sem** imposto (`gross_amount` em `sales`, ver
 [`supabase/functions/shopify-webhook/index.ts`](supabase/functions/shopify-webhook/index.ts)).
 
+### Recompensa por gift card (fechamento do mês)
+
+Seção **"Pagamento de Gift Card"** no painel admin, do lado da de comissão:
+
+- **"Gift Card do Ciclo Atual (em andamento)"** — ranking ao vivo (Membro /
+  Vendas / valor acumulado), só informativo, atualiza conforme cada afiliado
+  vende.
+- **"Pronto pra Enviar (meses fechados)"** — os ciclos já encerrados com
+  `gift_card_value > 0` e ainda não enviados. O admin preenche o **e-mail de
+  contato** (`members.contact_email`, editável na linha, salva sozinho),
+  escolhe a **loja** (Basic ou Exclusivos) e clica em **"Enviar Gift Card"**
+  (confirma digitando "ENVIAR"). O valor NÃO é digitado — vem de
+  `cycles.gift_card_value` (acumulado pelas metas).
+
+O botão chama a Edge Function `send-gift-card`, que:
+1. Cria o gift card na loja escolhida (`giftCardCreate`, app Shopify
+   separado — ver seção "Sincronização de mão dupla" mais abaixo, precisa de
+   `write_gift_cards`).
+2. Manda o código por e-mail via **Resend** (`RESEND_API_KEY`, mesma conta
+   do sistema Vendas Externas, domínio `m3ntalmadness.com`), com o template
+   visual completo da marca.
+3. Marca `cycles.gift_card_sent = true` (+ `_at`, `_code`, `_store`).
+
+Só ciclo já fechado (mês anterior) — se ainda tá aberto, recusa (o valor
+ainda pode subir).
+
 ### Configurações editáveis pelo painel admin
 
-A seção **"Configurações"**, no final do painel admin, deixa editar direto
-pela tela (sem SQL, sem deploy):
-
-- **Peças do drop atual** — varia de drop pra drop (geralmente 3 a 5 peças,
-  não é o catálogo geral da loja). Só admin pode editar
-  (`app_config.drop_piece_count`, RLS testado). Como o MVP ainda não
-  sincroniza isso com a Shopify automaticamente, alguém precisa atualizar
-  esse número toda vez que o drop mudar.
-- **Comissão (%)** — taxa aplicada a partir de 15 vendas
-  (`app_config.commission_rate`).
-
-Ao salvar, o painel chama a função `recalc_all_cycles_for_month` (RPC, só
-admin) que recalcula na hora os ciclos do mês selecionado com a regra nova —
-sem isso, a mudança só valeria a partir da próxima venda de cada membro.
+A seção **"Configurações"** deixa editar a **Comissão (%)**
+(`app_config.commission_rate`, taxa aplicada a partir de 6 vendas) direto
+pela tela. Ao salvar, chama `recalc_all_cycles_for_month` (RPC, só admin)
+que recalcula os ciclos do mês selecionado com a regra nova.
 
 ### Ponto em aberto (sem UI ainda, só SQL)
 
 **Comissão sobre valor bruto ou líquido?**
 Controlado por `app_config.commission_base` (`'gross'` ou `'net'`).
-Default atual: **bruto** (`'gross'`), decisão provisória do cliente. A
-coluna `sales.net_amount` já existe (hoje sempre `null`/0) para quando o
-valor líquido por venda estiver disponível. Para trocar:
-```sql
-update app_config set commission_base = 'net';
-```
-Se no futuro quiserem trocar a quantidade de peças automaticamente (puxando
-da Shopify via `GET /admin/api/.../products.json`), não é difícil de
-adicionar, mas fica fora do escopo deste MVP.
+Default atual: **bruto** (`'gross'`). A coluna `sales.net_amount` já existe
+(hoje sempre `null`/0) para quando o valor líquido por venda estiver
+disponível. Para trocar: `update app_config set commission_base = 'net';`
 
 ## Estrutura do banco
 
@@ -87,42 +104,26 @@ adicionar, mas fica fora do escopo deste MVP.
 - `sale_items` — os produtos daquela venda (um pedido pode ter mais de um
   item). Só para exibição na tabela de vendas recentes — não entra em nenhum
   cálculo de recompensa, que continua baseado só em `sales`.
-- `cycles` — a "foto" do mês de cada membro (vendas, valores, peças,
+- `cycles` — a "foto" do mês de cada membro (vendas, valores, gift card,
   comissão). Recalculada automaticamente por um trigger em `sales`
-  (`AFTER INSERT OR UPDATE OR DELETE`). Também guarda
-  `pieces_delivered_count` / `pieces_delivered_at` — controle manual do
-  admin (não mexido pelo trigger), usado pelo contador +/- no painel admin.
-  É uma contagem, não um sim/não, porque as peças são conquistadas aos
-  poucos ao longo do mês (5 vendas = 1 peça, +5 = outra, 15+ = todas as do
-  drop) — a entrega também acontece em remessas separadas.
-- `app_config` — os dois pontos em aberto acima.
+  (`AFTER INSERT OR UPDATE OR DELETE`). `gift_card_value` e
+  `commission_amount` vêm do trigger; `gift_card_sent` / `_at` / `_code` /
+  `_store` e `commission_paid` / `_at` são controle de envio, NÃO mexidos
+  pelo recálculo.
+- `app_config` — só `commission_base` e `commission_rate`.
 - RLS: cada membro só enxerga as próprias linhas (`sales`, `sale_items`,
   `cycles`, `members`); membros com `is_admin = true` (o Vitor) enxergam tudo.
-  Só admin pode fazer `UPDATE` em `cycles` (usado só pra marcar entrega de
-  peças — o resto dos campos é sempre recalculado pelo trigger).
 - Realtime habilitado em `sales`, `sale_items` e `cycles`.
 
-## Histórico de meses e entrega de peças
+## Histórico de meses
 
-- **Meta até a Próxima Peça**: segunda barra de progresso no painel do
-  membro, logo abaixo da barra do ciclo — reseta a cada 5 vendas (na 6ª
-  venda volta pra 1/5), contando a carreira toda do membro, independe do
-  mês. É só visual/motivacional (`src/components/LifetimeProgress.tsx`) —
-  não gera peça nem comissão; a barra mensal (5/15+/30+, resetando todo mês)
-  continua exatamente como estava.
 - **Vendas na Carreira**: 4º bloco no grid de estatísticas do topo do
-  painel do membro (junto de Vendas no Mês, Peças Conquistadas e Comissão
+  painel do membro (junto de Vendas no Mês, Gift Card Acumulado e Comissão
   Acumulada), com o total de vendas do membro desde sempre.
 - **Histórico**: o painel do membro e o painel admin têm um seletor de mês
   no topo (só aparece quando existe mais de um mês com dado — `cycles`
   acumula uma linha por membro/mês, então o histórico já existe sozinho
   conforme os meses passam, não precisa de nenhuma limpeza).
-- **Peças entregues**: no painel admin, cada membro com peças ganhas tem um
-  contador `− X/Y +` na tabela de Membros — o admin incrementa conforme vai
-  mandando cada remessa (não precisa ser tudo de uma vez). O painel do
-  membro mostra o mesmo progresso ("2 de 8 peças entregues" / "Todas as
-  peças já foram entregues") assim que ele tiver pelo menos 1 peça no ciclo
-  selecionado.
 - **Adicionar membro**: caixa "Adicionar Membro" no topo do painel admin
   (nome + cupom) — cadastra direto sem precisar de SQL, já preenchendo o
   e-mail sintético automaticamente. Só admin consegue (RLS testado). O

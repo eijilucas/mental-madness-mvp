@@ -125,10 +125,10 @@ input {
 }
 
 /* Efeito de "conquista": brilho pulsando + reflexo passando por cima do
-   símbolo, quando o membro já garantiu todas as peças do drop no ciclo
-   atual (ver LifetimeProgress/dropCompleted). O reflexo usa a própria logo
-   como máscara (mask-image) pra ficar recortado certinho no símbolo, sem
-   vazar um retângulo por cima da área transparente do PNG. */
+   símbolo, quando o membro bate o marco máximo do ciclo atual (15 vendas,
+   ver MemberDashboard/maxReached). O reflexo usa a própria logo como
+   máscara (mask-image) pra ficar recortado certinho no símbolo, sem vazar
+   um retângulo por cima da área transparente do PNG. */
 .mm-logo-celebrate .mm-logo-mark {
   animation: mm-logo-glow 2.4s ease-in-out infinite;
 }

@@ -15,9 +15,12 @@ const currencyFormatter = new Intl.NumberFormat("pt-BR", { style: "currency", cu
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 
 function tierLabel(salesCount: number): string {
-  if (salesCount >= 30) return "30+ · 5% comissão";
-  if (salesCount >= 15) return "15+ · peças do drop + 5%";
-  if (salesCount >= 5) return "5+ · peças";
+  if (salesCount >= 15) return "15+ · R$1.050 gift card + 5%";
+  if (salesCount >= 10) return "10+ · R$650 gift card + 5%";
+  if (salesCount >= 7) return "7+ · R$400 gift card + 5%";
+  if (salesCount >= 6) return "6+ · R$250 gift card + 5%";
+  if (salesCount >= 5) return "5+ · R$250 gift card";
+  if (salesCount >= 3) return "3+ · R$100 gift card";
   return "sem marco";
 }
 
@@ -34,6 +37,10 @@ interface PendingPayout extends Cycle {
   members: Pick<Member, "id" | "name" | "coupon_code" | "pix_key" | "pix_key_type" | "is_admin">;
 }
 
+interface PendingGiftCard extends Cycle {
+  members: Pick<Member, "id" | "name" | "coupon_code" | "contact_email" | "is_admin">;
+}
+
 const PIX_KEY_TYPES: { value: NonNullable<Member["pix_key_type"]>; label: string }[] = [
   { value: "CPF", label: "CPF" },
   { value: "CNPJ", label: "CNPJ" },
@@ -42,7 +49,7 @@ const PIX_KEY_TYPES: { value: NonNullable<Member["pix_key_type"]>; label: string
   { value: "EVP", label: "Aleatória" },
 ];
 
-type SortKey = "name" | "coupon" | "sales" | "gross" | "pieces" | "commission";
+type SortKey = "name" | "coupon" | "sales" | "gross" | "giftcard" | "commission";
 type SortDir = "asc" | "desc";
 
 const SORT_LABEL: Record<SortKey, string> = {
@@ -50,7 +57,7 @@ const SORT_LABEL: Record<SortKey, string> = {
   coupon: "Cupom",
   sales: "Vendas",
   gross: "Valor Líquido",
-  pieces: "Peças",
+  giftcard: "Gift Card",
   commission: "Comissão",
 };
 
@@ -64,8 +71,8 @@ function sortValue(row: MemberWithCycle, key: SortKey): string | number {
       return row.cycle?.sales_count ?? 0;
     case "gross":
       return row.cycle?.gross_total ?? 0;
-    case "pieces":
-      return row.cycle?.pieces_earned ?? 0;
+    case "giftcard":
+      return row.cycle?.gift_card_value ?? 0;
     case "commission":
       return row.cycle?.commission_amount ?? 0;
   }
@@ -86,7 +93,6 @@ export function AdminDashboard() {
   const [resettingId, setResettingId] = useState<string | null>(null);
   const [resetResult, setResetResult] = useState<{ coupon: string; password: string } | null>(null);
   const [resetError, setResetError] = useState<string | null>(null);
-  const [togglingCycleId, setTogglingCycleId] = useState<string | null>(null);
   const [availableMonths, setAvailableMonths] = useState<string[]>([currentCycleMonth()]);
   const [selectedMonth, setSelectedMonth] = useState(currentCycleMonth());
   const nextMonth = nextCycleMonth(selectedMonth);
@@ -236,7 +242,6 @@ export function AdminDashboard() {
   }
 
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
-  const [dropPiecesDraft, setDropPiecesDraft] = useState("");
   const [commissionPctDraft, setCommissionPctDraft] = useState("");
   const [savingConfig, setSavingConfig] = useState(false);
   const [configMessage, setConfigMessage] = useState<string | null>(null);
@@ -251,7 +256,6 @@ export function AdminDashboard() {
       .then(({ data }) => {
         if (!data) return;
         setAppConfig(data);
-        setDropPiecesDraft(String(data.drop_piece_count));
         setCommissionPctDraft(String(Math.round(data.commission_rate * 10000) / 100));
       });
   }
@@ -260,13 +264,8 @@ export function AdminDashboard() {
     setConfigError(null);
     setConfigMessage(null);
 
-    const dropPieces = Number(dropPiecesDraft);
     const commissionPct = Number(commissionPctDraft);
 
-    if (!Number.isInteger(dropPieces) || dropPieces < 0) {
-      setConfigError("Peças do drop precisa ser um número inteiro, 0 ou mais.");
-      return;
-    }
     if (!Number.isFinite(commissionPct) || commissionPct < 0 || commissionPct > 100) {
       setConfigError("Comissão precisa ser um número entre 0 e 100.");
       return;
@@ -276,7 +275,7 @@ export function AdminDashboard() {
 
     const { error: updateError } = await supabase
       .from("app_config")
-      .update({ drop_piece_count: dropPieces, commission_rate: commissionPct / 100, updated_at: new Date().toISOString() })
+      .update({ commission_rate: commissionPct / 100, updated_at: new Date().toISOString() })
       .eq("id", 1);
 
     if (updateError) {
@@ -472,20 +471,6 @@ export function AdminDashboard() {
     setReloadTick((t) => t + 1);
   }
 
-  async function handleDeliveryChange(cycle: Cycle, delta: 1 | -1) {
-    const nextCount = Math.min(cycle.pieces_earned, Math.max(0, cycle.pieces_delivered_count + delta));
-    if (nextCount === cycle.pieces_delivered_count) return;
-
-    setTogglingCycleId(cycle.id);
-
-    await supabase
-      .from("cycles")
-      .update({ pieces_delivered_count: nextCount, pieces_delivered_at: new Date().toISOString() })
-      .eq("id", cycle.id);
-
-    setTogglingCycleId(null);
-  }
-
   // --- Pagamento de comissão via PIX (dia 5) -------------------------------
   // O crédito de R$5K fica na conta do Asaas. O botão "Enviar PIX" chama a
   // function pay-commission-pix, que usa a API de Transferências do Asaas
@@ -502,9 +487,12 @@ export function AdminDashboard() {
   const [savingPixKeyId, setSavingPixKeyId] = useState<string | null>(null);
   const [transfersUsedThisMonth, setTransfersUsedThisMonth] = useState(0);
 
-  // --- Gift card (recompensa por peça, substitui escolher peça física) ----
+  // --- Gift card (recompensa por meta de venda, mês fechado) -------------
+  // Valor vem calculado no ciclo (cycles.gift_card_value, acumulativo pelas
+  // metas). Admin não digita valor -- só escolhe a loja e confirma. Um
+  // único gift card por membro/mês; send-gift-card marca gift_card_sent.
+  const [pendingGiftCards, setPendingGiftCards] = useState<PendingGiftCard[]>([]);
   const [contactEmailDrafts, setContactEmailDrafts] = useState<Record<string, string>>({});
-  const [giftCardAmountDrafts, setGiftCardAmountDrafts] = useState<Record<string, string>>({});
   const [giftCardStoreDrafts, setGiftCardStoreDrafts] = useState<Record<string, "basic" | "exclusivos">>({});
   const [savingContactEmailId, setSavingContactEmailId] = useState<string | null>(null);
   const [sendingGiftCardId, setSendingGiftCardId] = useState<string | null>(null);
@@ -524,44 +512,35 @@ export function AdminDashboard() {
     setSavingContactEmailId(null);
   }
 
-  async function handleSendGiftCard(row: MemberWithCycle) {
+  async function handleSendGiftCard(giftCard: PendingGiftCard) {
     setGiftCardError(null);
     setGiftCardSuccess(null);
 
-    if (!row.cycle) return;
-
-    const email = (contactEmailDrafts[row.id] ?? row.contact_email ?? "").trim();
+    const email = (contactEmailDrafts[giftCard.members.id] ?? giftCard.members.contact_email ?? "").trim();
     if (!email) {
-      setGiftCardError(`Cadastra o e-mail de contato de ${row.name} antes de enviar.`);
+      setGiftCardError(`Cadastra o e-mail de contato de ${giftCard.members.name} antes de enviar.`);
       return;
     }
 
-    const store = giftCardStoreDrafts[row.id];
+    const store = giftCardStoreDrafts[giftCard.members.id];
     if (!store) {
-      setGiftCardError(`Escolhe a loja do gift card de ${row.name}.`);
-      return;
-    }
-
-    const amount = Number((giftCardAmountDrafts[row.id] ?? "").replace(",", "."));
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setGiftCardError(`Digita um valor válido pro gift card de ${row.name}.`);
+      setGiftCardError(`Escolhe a loja do gift card de ${giftCard.members.name}.`);
       return;
     }
 
     const typed = window.prompt(
-      `Vai criar um gift card de ${currencyFormatter.format(amount)} (loja ${store === "basic" ? "Basic" : "Exclusivos"}) pra ${row.name}, mandado pra ${email}.\n\nPra confirmar, digite ENVIAR:`,
+      `Vai criar um gift card de ${currencyFormatter.format(giftCard.gift_card_value)} (loja ${store === "basic" ? "Basic" : "Exclusivos"}) pra ${giftCard.members.name}, mandado pra ${email}.\n\nPra confirmar, digite ENVIAR:`,
     );
     if (typed !== "ENVIAR") {
       if (typed !== null) window.alert('Não digitou "ENVIAR" — nada foi enviado.');
       return;
     }
 
-    setSendingGiftCardId(row.id);
+    setSendingGiftCardId(giftCard.id);
     const { data, error } = await invokeAdminFunction("send-gift-card", {
-      member_id: row.id,
-      cycle_id: row.cycle.id,
+      member_id: giftCard.members.id,
+      cycle_id: giftCard.id,
       store,
-      amount,
     });
     setSendingGiftCardId(null);
 
@@ -570,8 +549,8 @@ export function AdminDashboard() {
       return;
     }
 
-    setGiftCardSuccess(`Gift card enviado pra ${row.name} (${email}).`);
-    setReloadTick((t) => t + 1);
+    setGiftCardSuccess(`Gift card enviado pra ${giftCard.members.name} (${email}).`);
+    loadPayments();
   }
 
   function loadPayments() {
@@ -596,6 +575,26 @@ export function AdminDashboard() {
           const next = { ...prev };
           for (const p of payouts) {
             if (!(p.members.id in next)) next[p.members.id] = p.members.pix_key_type ?? "";
+          }
+          return next;
+        });
+      });
+
+    // Gift card de mês fechado, ainda não enviado.
+    supabase
+      .from("cycles")
+      .select("*, members!inner(id, name, coupon_code, contact_email, is_admin)")
+      .lt("cycle_month", currentCycleMonth())
+      .gt("gift_card_value", 0)
+      .eq("gift_card_sent", false)
+      .order("cycle_month", { ascending: true })
+      .then(({ data }) => {
+        const cards = ((data as unknown as PendingGiftCard[]) ?? []).filter((g) => !g.members.is_admin);
+        setPendingGiftCards(cards);
+        setContactEmailDrafts((prev) => {
+          const next = { ...prev };
+          for (const g of cards) {
+            if (!(g.members.id in next)) next[g.members.id] = g.members.contact_email ?? "";
           }
           return next;
         });
@@ -834,7 +833,7 @@ export function AdminDashboard() {
 
   const totalSales = rows.reduce((sum, r) => sum + (r.cycle?.sales_count ?? 0), 0);
   const totalGross = rows.reduce((sum, r) => sum + (r.cycle?.gross_total ?? 0), 0);
-  const totalPieces = rows.reduce((sum, r) => sum + (r.cycle?.pieces_earned ?? 0), 0);
+  const totalGiftCard = rows.reduce((sum, r) => sum + (r.cycle?.gift_card_value ?? 0), 0);
   const totalCommission = rows.reduce((sum, r) => sum + (r.cycle?.commission_amount ?? 0), 0);
 
   // Ranking ao vivo do ciclo em andamento (mês atual, ainda não fechou pra
@@ -848,20 +847,18 @@ export function AdminDashboard() {
           .sort((a, b) => (b.cycle?.commission_amount ?? 0) - (a.cycle?.commission_amount ?? 0))
       : [];
 
-  // Mesmo espírito de currentMonthEarners, mas pra peças -- ranking do ciclo
-  // em andamento.
-  const currentPieceEarners =
+  // Mesmo espírito de currentMonthEarners, mas pro gift card acumulado --
+  // ranking do ciclo em andamento (informativo, só envia no fechamento).
+  const currentGiftCardEarners =
     selectedMonth === currentCycleMonth()
       ? rows
-          .filter((r) => (r.cycle?.pieces_earned ?? 0) > 0)
-          .sort((a, b) => (b.cycle?.pieces_earned ?? 0) - (a.cycle?.pieces_earned ?? 0))
+          .filter((r) => (r.cycle?.gift_card_value ?? 0) > 0)
+          .sort((a, b) => (b.cycle?.gift_card_value ?? 0) - (a.cycle?.gift_card_value ?? 0))
       : [];
 
-  // Peça(s) conquistada(s) mas ainda não entregue(s) nem substituída(s) por
-  // gift card -- é essa lista que aparece pronta pra disparar o envio.
-  const pendingGiftCardRows = rows.filter(
-    (r) => r.cycle && (r.cycle.pieces_earned ?? 0) > (r.cycle.pieces_delivered_count ?? 0),
-  );
+  // Gift cards de mês fechado, filtrados pro mês selecionado no topo.
+  const visiblePendingGiftCards = pendingGiftCards.filter((g) => g.cycle_month === selectedMonth);
+  const totalPendingGiftCards = visiblePendingGiftCards.reduce((sum, g) => sum + g.gift_card_value, 0);
 
   return (
     <div className="mm-app-frame">
@@ -878,7 +875,7 @@ export function AdminDashboard() {
       <section className="mm-table-section" style={{ marginBottom: 24 }}>
         <h2 className="mm-section-title">Configurações</h2>
         <div className="mm-label" style={{ marginBottom: 16 }}>
-          Vale pra todo mundo, a partir de 15 vendas no mês.
+          Comissão fixa, ativa a partir de 6 vendas no mês (sobre o valor vendido no mês inteiro).
         </div>
 
         {configMessage && (
@@ -899,20 +896,6 @@ export function AdminDashboard() {
         )}
 
         <div className="mm-config-grid">
-          <div className="mm-field">
-            <label className="mm-label" htmlFor="drop-pieces">
-              Peças do drop atual
-            </label>
-            <input
-              id="drop-pieces"
-              type="number"
-              min={0}
-              step={1}
-              value={dropPiecesDraft}
-              onChange={(e) => setDropPiecesDraft(e.target.value)}
-            />
-          </div>
-
           <div className="mm-field">
             <label className="mm-label" htmlFor="commission-pct">
               Comissão (%)
@@ -942,7 +925,7 @@ export function AdminDashboard() {
       <div className="mm-admin-summary-grid">
         <StatCard label="Vendas do Mês" value={String(totalSales)} />
         <StatCard label="Valor Líquido" value={currencyFormatter.format(totalGross)} />
-        <StatCard label="Peças a Entregar" value={String(totalPieces)} accent />
+        <StatCard label="Gift Cards do Mês" value={currencyFormatter.format(totalGiftCard)} accent />
         <StatCard label="Comissões do Mês" value={currencyFormatter.format(totalCommission)} accent />
       </div>
 
@@ -1087,7 +1070,8 @@ export function AdminDashboard() {
       <section className="mm-table-section" style={{ marginBottom: 24 }}>
         <h2 className="mm-section-title">Pagamento de Gift Card</h2>
         <div className="mm-label" style={{ marginBottom: 16 }}>
-          Substitui o afiliado escolher uma peça física — cria um gift card na Shopify e manda o código por e-mail.
+          Recompensa por meta de venda no mês (3→R$100, 5→+R$150, 7→+R$150, 10→+R$250, 15→+R$400). Um único gift card
+          por membro no fechamento do mês — cria na Shopify e manda o código por e-mail.
         </div>
 
         {giftCardSuccess && (
@@ -1109,29 +1093,29 @@ export function AdminDashboard() {
 
         {selectedMonth === currentCycleMonth() && (
           <div style={{ marginBottom: 24 }}>
-            <h3 style={{ margin: "0 0 4px", fontSize: 13, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-label)" }}>
-              Peças do Ciclo Atual (em andamento)
+            <h3 style={{ margin: "0 0 12px", fontSize: 13, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-label)" }}>
+              Gift Card do Ciclo Atual (em andamento)
             </h3>
-            {currentPieceEarners.length === 0 ? (
-              <div className="mm-empty-state">Ninguém ganhou peça neste ciclo ainda.</div>
+            {currentGiftCardEarners.length === 0 ? (
+              <div className="mm-empty-state">Ninguém bateu meta de gift card neste ciclo ainda.</div>
             ) : (
               <table className="mm-table">
                 <thead>
                   <tr>
                     <th>Membro</th>
                     <th>Vendas</th>
-                    <th>Qtd. de Peças</th>
+                    <th>Gift Card Acumulado</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {currentPieceEarners.map((row) => (
+                  {currentGiftCardEarners.map((row) => (
                     <tr key={row.id}>
                       <td>
                         <span className="mm-member-row-name">{row.name}</span>{" "}
                         <span className="mm-member-row-coupon">{row.coupon_code}</span>
                       </td>
                       <td>{row.cycle?.sales_count ?? 0}</td>
-                      <td>{row.cycle?.pieces_earned ?? 0}</td>
+                      <td className="mm-cell-amount">{currencyFormatter.format(row.cycle?.gift_card_value ?? 0)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1141,81 +1125,74 @@ export function AdminDashboard() {
         )}
 
         <h3 style={{ margin: "0 0 12px", fontSize: 13, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-label)" }}>
-          Pronto pra Enviar
+          Pronto pra Enviar (meses fechados)
+          {visiblePendingGiftCards.length > 0 && (
+            <span style={{ color: "var(--text-primary)", marginLeft: 8 }}>
+              — total {currencyFormatter.format(totalPendingGiftCards)}
+            </span>
+          )}
         </h3>
 
-        {pendingGiftCardRows.length === 0 ? (
-          <div className="mm-empty-state">Nenhuma peça pendente de envio pra {formatCycleMonthLabel(selectedMonth)}.</div>
+        {visiblePendingGiftCards.length === 0 ? (
+          <div className="mm-empty-state">Nenhum gift card pendente de envio pra {formatCycleMonthLabel(selectedMonth)}.</div>
         ) : (
           <div className="mm-table-hscroll">
           <table className="mm-table">
             <thead>
               <tr>
                 <th>Membro</th>
-                <th>Peças</th>
+                <th>Mês</th>
+                <th>Valor</th>
                 <th>E-mail de contato</th>
                 <th>Loja</th>
-                <th>Valor (R$)</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {pendingGiftCardRows.map((row) => {
-                const pending = (row.cycle?.pieces_earned ?? 0) - (row.cycle?.pieces_delivered_count ?? 0);
-                return (
-                  <tr key={row.id}>
-                    <td>
-                      <span className="mm-member-row-name">{row.name}</span>{" "}
-                      <span className="mm-member-row-coupon">{row.coupon_code}</span>
-                    </td>
-                    <td>{pending}</td>
-                    <td>
-                      <input
-                        className="mm-inline-edit-input"
-                        type="text"
-                        placeholder="email@exemplo.com"
-                        value={contactEmailDrafts[row.id] ?? row.contact_email ?? ""}
-                        onChange={(e) => handleContactEmailChange(row.id, e.target.value)}
-                        onBlur={() => handleContactEmailBlur(row.id, row.contact_email ?? "")}
-                        disabled={savingContactEmailId === row.id}
-                      />
-                    </td>
-                    <td>
-                      <select
-                        className="mm-inline-edit-input"
-                        value={giftCardStoreDrafts[row.id] ?? ""}
-                        onChange={(e) =>
-                          setGiftCardStoreDrafts((prev) => ({ ...prev, [row.id]: e.target.value as "basic" | "exclusivos" }))
-                        }
-                      >
-                        <option value="">Loja</option>
-                        <option value="basic">Basic</option>
-                        <option value="exclusivos">Exclusivos</option>
-                      </select>
-                    </td>
-                    <td>
-                      <input
-                        className="mm-inline-edit-input"
-                        type="text"
-                        inputMode="decimal"
-                        placeholder="0,00"
-                        value={giftCardAmountDrafts[row.id] ?? ""}
-                        onChange={(e) => setGiftCardAmountDrafts((prev) => ({ ...prev, [row.id]: e.target.value }))}
-                      />
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="mm-link-btn"
-                        disabled={sendingGiftCardId === row.id}
-                        onClick={() => handleSendGiftCard(row)}
-                      >
-                        {sendingGiftCardId === row.id ? "Enviando..." : "Enviar Gift Card"}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+              {visiblePendingGiftCards.map((giftCard) => (
+                <tr key={giftCard.id}>
+                  <td>
+                    <span className="mm-member-row-name">{giftCard.members.name}</span>{" "}
+                    <span className="mm-member-row-coupon">{giftCard.members.coupon_code}</span>
+                  </td>
+                  <td>{formatCycleMonthLabel(giftCard.cycle_month)}</td>
+                  <td className="mm-cell-amount">{currencyFormatter.format(giftCard.gift_card_value)}</td>
+                  <td>
+                    <input
+                      className="mm-inline-edit-input"
+                      type="text"
+                      placeholder="email@exemplo.com"
+                      value={contactEmailDrafts[giftCard.members.id] ?? ""}
+                      onChange={(e) => handleContactEmailChange(giftCard.members.id, e.target.value)}
+                      onBlur={() => handleContactEmailBlur(giftCard.members.id, giftCard.members.contact_email ?? "")}
+                      disabled={savingContactEmailId === giftCard.members.id}
+                    />
+                  </td>
+                  <td>
+                    <select
+                      className="mm-inline-edit-input"
+                      value={giftCardStoreDrafts[giftCard.members.id] ?? ""}
+                      onChange={(e) =>
+                        setGiftCardStoreDrafts((prev) => ({ ...prev, [giftCard.members.id]: e.target.value as "basic" | "exclusivos" }))
+                      }
+                    >
+                      <option value="">Loja</option>
+                      <option value="basic">Basic</option>
+                      <option value="exclusivos">Exclusivos</option>
+                    </select>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="mm-link-btn"
+                      disabled={sendingGiftCardId === giftCard.id}
+                      onClick={() => handleSendGiftCard(giftCard)}
+                    >
+                      {sendingGiftCardId === giftCard.id ? "Enviando..." : "Enviar Gift Card"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
           </div>
@@ -1458,7 +1435,7 @@ export function AdminDashboard() {
           <table className="mm-table">
             <thead>
               <tr>
-                {(["name", "coupon", "sales", "gross", "pieces", "commission"] as SortKey[]).map((key) => (
+                {(["name", "coupon", "sales", "gross", "giftcard", "commission"] as SortKey[]).map((key) => (
                   <th key={key}>
                     <button type="button" className="mm-sort-th-btn" onClick={() => handleSort(key)}>
                       {SORT_LABEL[key]}
@@ -1467,14 +1444,12 @@ export function AdminDashboard() {
                   </th>
                 ))}
                 <th>Marco</th>
-                <th>Entrega</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {sortedRows.map((row) => {
                 const salesCount = row.cycle?.sales_count ?? 0;
-                const piecesEarned = row.cycle?.pieces_earned ?? 0;
                 return (
                   <tr key={row.id}>
                     {editingMemberId === row.id ? (
@@ -1514,41 +1489,12 @@ export function AdminDashboard() {
                     )}
                     <td>{salesCount}</td>
                     <td className="mm-cell-amount">{currencyFormatter.format(row.cycle?.gross_total ?? 0)}</td>
-                    <td>{piecesEarned}</td>
+                    <td className="mm-cell-amount">{currencyFormatter.format(row.cycle?.gift_card_value ?? 0)}</td>
                     <td className="mm-cell-amount">{currencyFormatter.format(row.cycle?.commission_amount ?? 0)}</td>
                     <td>
-                      <span className={`mm-tier-badge${salesCount >= 5 ? " mm-tier-active" : ""}`}>
+                      <span className={`mm-tier-badge${salesCount >= 3 ? " mm-tier-active" : ""}`}>
                         {tierLabel(salesCount)}
                       </span>
-                    </td>
-                    <td>
-                      {piecesEarned > 0 && row.cycle ? (
-                        <div className="mm-delivery-stepper">
-                          <button
-                            type="button"
-                            className="mm-delivery-step-btn"
-                            disabled={togglingCycleId === row.cycle.id || row.cycle.pieces_delivered_count <= 0}
-                            onClick={() => handleDeliveryChange(row.cycle!, -1)}
-                          >
-                            −
-                          </button>
-                          <span
-                            className={`mm-delivery-count${row.cycle.pieces_delivered_count >= piecesEarned ? " mm-delivery-count-done" : ""}`}
-                          >
-                            {row.cycle.pieces_delivered_count} / {piecesEarned}
-                          </span>
-                          <button
-                            type="button"
-                            className="mm-delivery-step-btn"
-                            disabled={togglingCycleId === row.cycle.id || row.cycle.pieces_delivered_count >= piecesEarned}
-                            onClick={() => handleDeliveryChange(row.cycle!, 1)}
-                          >
-                            +
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="mm-label">—</span>
-                      )}
                     </td>
                     <td>
                       {editingMemberId === row.id ? (

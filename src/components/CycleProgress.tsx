@@ -3,13 +3,14 @@ import { cycleProgressPercent, formatCommissionPct, milestoneProgress } from "..
 
 interface CycleProgressProps {
   salesCount: number;
-  dropPieceCount: number;
   commissionRate: number;
 }
 
-export function CycleProgress({ salesCount, dropPieceCount, commissionRate }: CycleProgressProps) {
+const currencyFormatter = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+
+export function CycleProgress({ salesCount, commissionRate }: CycleProgressProps) {
   const percent = cycleProgressPercent(salesCount);
-  const milestones = milestoneProgress(salesCount, dropPieceCount, commissionRate);
+  const milestones = milestoneProgress(salesCount, commissionRate);
   const pct = formatCommissionPct(commissionRate);
 
   // Começa em 0 e anima até o valor real a cada mudança — tanto no primeiro
@@ -46,24 +47,30 @@ export function CycleProgress({ salesCount, dropPieceCount, commissionRate }: Cy
       </div>
 
       <div className="mm-rewards-explainer">
-        <div className="mm-label">Condições para receber as peças e comissões</div>
+        <div className="mm-label">Condições para receber gift card e comissão</div>
         <ul className="mm-rewards-list">
           <li>
-            <strong>5 vendas</strong> = 1 peça.
+            <strong>3 vendas</strong> = gift card de {currencyFormatter.format(100)}.
           </li>
           <li>
-            <strong>6 vendas</strong> = {pct} de comissão.
+            <strong>5 vendas</strong> = + {currencyFormatter.format(150)} de gift card.
           </li>
           <li>
-            <strong>10 vendas</strong> = 2 peças + {pct} de comissão.
+            <strong>6 vendas</strong> = {pct} de comissão (sobre o valor do mês inteiro).
           </li>
           <li>
-            <strong>15+ vendas</strong> = todas as peças do drop ({dropPieceCount}) + {pct} de comissão.
+            <strong>7 vendas</strong> = + {currencyFormatter.format(150)} de gift card.
           </li>
           <li>
-            <strong>30+ vendas</strong> = {pct} de comissão.
+            <strong>10 vendas</strong> = + {currencyFormatter.format(250)} de gift card.
+          </li>
+          <li>
+            <strong>15+ vendas</strong> = + {currencyFormatter.format(400)} de gift card (total de {currencyFormatter.format(1050)}).
           </li>
         </ul>
+        <div className="mm-label" style={{ marginTop: 8 }}>
+          Os valores de gift card vão somando ao longo do mês — no fechamento você recebe um único gift card com o total.
+        </div>
       </div>
     </section>
   );
