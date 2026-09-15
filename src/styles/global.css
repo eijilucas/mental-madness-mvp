@@ -118,6 +118,16 @@ input {
   object-fit: contain;
 }
 
+.mm-logo-link {
+  display: inline-flex;
+  border-radius: 6px;
+}
+
+.mm-logo-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 /* A logo é branca com fundo transparente — some no modo claro se não
    inverter a cor. */
 :root[data-theme="light"] .mm-logo-mark {
