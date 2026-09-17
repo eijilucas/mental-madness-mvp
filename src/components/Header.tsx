@@ -19,10 +19,8 @@ export function Header({ memberName, couponCode, onSignOut, rightSlot, celebrate
         <div className={`mm-logo-mark-wrap${celebrate ? " mm-logo-celebrate" : ""}`}>
           <a
             href="https://mental-madness-hub.vercel.app/"
-            target="_blank"
-            rel="noopener noreferrer"
             className="mm-logo-link"
-            aria-label="Abrir o Hub Mental Madness"
+            aria-label="Ir para o Hub Mental Madness"
             title="Hub Mental Madness"
           >
             <img src="/logo-m.png" alt="" className="mm-logo-mark" />
