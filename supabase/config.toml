@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.register-external-order-sale]
 verify_jwt = false
+
+[functions.list-external-coupons]
+verify_jwt = false
