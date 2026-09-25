@@ -841,84 +841,6 @@ export function AdminDashboard() {
       />
 
       <section className="mm-table-section" style={{ marginBottom: 24 }}>
-        <h2 className="mm-section-title">Adicionar Membro</h2>
-
-        {addMemberResult && (
-          <div className="mm-reset-banner">
-            Membro <strong>{addMemberResult.coupon}</strong> criado com login. Senha temporária:{" "}
-            <strong>{addMemberResult.password}</strong> (vai pedir pra trocar no primeiro login).
-            <button type="button" className="mm-link-btn" onClick={() => setAddMemberResult(null)}>
-              Fechar
-            </button>
-          </div>
-        )}
-        {addMemberError && (
-          <div className="mm-reset-banner mm-reset-banner-error">
-            {addMemberError}
-            <button type="button" className="mm-link-btn" onClick={() => setAddMemberError(null)}>
-              Fechar
-            </button>
-          </div>
-        )}
-
-        <div className="mm-config-grid">
-          <div className="mm-field">
-            <label className="mm-label" htmlFor="new-member-name">
-              Nome
-            </label>
-            <input
-              id="new-member-name"
-              type="text"
-              value={newMemberName}
-              onChange={(e) => setNewMemberName(e.target.value)}
-            />
-          </div>
-
-          <div className="mm-field">
-            <label className="mm-label" htmlFor="new-member-coupon">
-              Cupom
-            </label>
-            <input
-              id="new-member-coupon"
-              type="text"
-              value={newMemberCoupon}
-              onChange={(e) => setNewMemberCoupon(e.target.value)}
-            />
-          </div>
-
-          <div className="mm-field">
-            <label className="mm-label">Criar cupom na Shopify</label>
-            <div style={{ display: "flex", gap: 16, height: 42, alignItems: "center" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                <input type="checkbox" checked={newMemberStoreBasic} onChange={(e) => setNewMemberStoreBasic(e.target.checked)} />
-                Basic
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={newMemberStoreExclusivos}
-                  onChange={(e) => setNewMemberStoreExclusivos(e.target.checked)}
-                />
-                Exclusivos
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={newMemberStoreShadow}
-                  onChange={(e) => setNewMemberStoreShadow(e.target.checked)}
-                />
-                Shadow
-              </label>
-            </div>
-          </div>
-
-          <button type="button" className="mm-config-save-btn" disabled={addingMember} onClick={handleAddMember}>
-            {addingMember ? "Adicionando..." : "Adicionar"}
-          </button>
-        </div>
-      </section>
-
-      <section className="mm-table-section" style={{ marginBottom: 24 }}>
         <h2 className="mm-section-title">Configurações</h2>
         <div className="mm-label" style={{ marginBottom: 16 }}>
           Comissão fixa, ativa a partir de 6 vendas no mês (sobre o valor vendido no mês inteiro).
@@ -1243,6 +1165,84 @@ export function AdminDashboard() {
           </table>
           </div>
         )}
+      </section>
+
+      <section className="mm-table-section" style={{ marginBottom: 24 }}>
+        <h2 className="mm-section-title">Adicionar Membro</h2>
+
+        {addMemberResult && (
+          <div className="mm-reset-banner">
+            Membro <strong>{addMemberResult.coupon}</strong> criado com login. Senha temporária:{" "}
+            <strong>{addMemberResult.password}</strong> (vai pedir pra trocar no primeiro login).
+            <button type="button" className="mm-link-btn" onClick={() => setAddMemberResult(null)}>
+              Fechar
+            </button>
+          </div>
+        )}
+        {addMemberError && (
+          <div className="mm-reset-banner mm-reset-banner-error">
+            {addMemberError}
+            <button type="button" className="mm-link-btn" onClick={() => setAddMemberError(null)}>
+              Fechar
+            </button>
+          </div>
+        )}
+
+        <div className="mm-config-grid">
+          <div className="mm-field">
+            <label className="mm-label" htmlFor="new-member-name">
+              Nome
+            </label>
+            <input
+              id="new-member-name"
+              type="text"
+              value={newMemberName}
+              onChange={(e) => setNewMemberName(e.target.value)}
+            />
+          </div>
+
+          <div className="mm-field">
+            <label className="mm-label" htmlFor="new-member-coupon">
+              Cupom
+            </label>
+            <input
+              id="new-member-coupon"
+              type="text"
+              value={newMemberCoupon}
+              onChange={(e) => setNewMemberCoupon(e.target.value)}
+            />
+          </div>
+
+          <div className="mm-field">
+            <label className="mm-label">Criar cupom na Shopify</label>
+            <div style={{ display: "flex", gap: 16, height: 42, alignItems: "center" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input type="checkbox" checked={newMemberStoreBasic} onChange={(e) => setNewMemberStoreBasic(e.target.checked)} />
+                Basic
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={newMemberStoreExclusivos}
+                  onChange={(e) => setNewMemberStoreExclusivos(e.target.checked)}
+                />
+                Exclusivos
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={newMemberStoreShadow}
+                  onChange={(e) => setNewMemberStoreShadow(e.target.checked)}
+                />
+                Shadow
+              </label>
+            </div>
+          </div>
+
+          <button type="button" className="mm-config-save-btn" disabled={addingMember} onClick={handleAddMember}>
+            {addingMember ? "Adicionando..." : "Adicionar"}
+          </button>
+        </div>
       </section>
 
       <section className="mm-table-section" style={{ marginBottom: 24 }}>
