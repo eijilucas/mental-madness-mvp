@@ -25,6 +25,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import {
   createAffiliateDiscount,
+  DISCOUNT_ID_COLUMN,
   getDiscountCollectionIds,
   getStoreConfig,
   renameAffiliateDiscount,
@@ -36,11 +37,6 @@ import {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-
-const DISCOUNT_ID_COLUMN: Record<StoreKey, "shopify_discount_id_basic" | "shopify_discount_id_exclusivos"> = {
-  basic: "shopify_discount_id_basic",
-  exclusivos: "shopify_discount_id_exclusivos",
-};
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -84,7 +80,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: member, error: memberError } = await adminClient
     .from("members")
-    .select("id, coupon_code, shopify_discount_id_basic, shopify_discount_id_exclusivos")
+    .select("id, coupon_code, shopify_discount_id_basic, shopify_discount_id_exclusivos, shopify_discount_id_shadow")
     .eq("id", body.member_id)
     .maybeSingle();
   if (memberError || !member) return jsonResponse({ error: "Membro não encontrado" }, 404);
@@ -128,7 +124,7 @@ Deno.serve(async (req: Request) => {
           .order("created_at", { ascending: true })
           .limit(5);
         let collectionIds: string[] = [];
-        for (const candidate of referenceCandidates ?? []) {
+        for (const candidate of (referenceCandidates ?? []) as Record<string, unknown>[]) {
           const candidateId = candidate[DISCOUNT_ID_COLUMN[store]] as string;
           collectionIds = await getDiscountCollectionIds(config, candidateId);
           if (collectionIds.length > 0) break;

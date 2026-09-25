@@ -8,7 +8,7 @@
 // client_id + client_secret. Ver:
 // https://shopify.dev/docs/apps/build/authentication-authorization/client-credentials-grant
 //
-// Secrets esperados (por loja, "BASIC" ou "EXCLUSIVOS"):
+// Secrets esperados (por loja, "BASIC", "EXCLUSIVOS" ou "SHADOW"):
 //   SHOPIFY_STORE_DOMAIN_<LOJA>   ex: m3ntalmadness.myshopify.com
 //   SHOPIFY_CLIENT_ID_<LOJA>
 //   SHOPIFY_CLIENT_SECRET_<LOJA>
@@ -23,9 +23,11 @@
 //   SHOPIFY_GIFTCARD_CLIENT_ID_<LOJA>
 //   SHOPIFY_GIFTCARD_CLIENT_SECRET_<LOJA>
 // Escopo necessário: write_gift_cards.
+// (Shadow não tem app de gift card configurado aqui -- getGiftCardStoreConfig
+// simplesmente devolve null pra ela até que exista.)
 // ============================================================================
 
-export const STORE_KEYS = ["basic", "exclusivos"] as const;
+export const STORE_KEYS = ["basic", "exclusivos", "shadow"] as const;
 export type StoreKey = (typeof STORE_KEYS)[number];
 
 export interface ShopifyStoreConfig {
@@ -42,6 +44,31 @@ export function getStoreConfig(store: StoreKey): ShopifyStoreConfig | null {
   const clientSecret = Deno.env.get(`SHOPIFY_CLIENT_SECRET_${suffix}`);
   if (!domain || !clientId || !clientSecret) return null;
   return { key: store, domain, clientId, clientSecret };
+}
+
+// Coluna de members.shopify_discount_id_<loja> correspondente a cada loja --
+// centralizado aqui (em vez de um ternário `store === "basic" ? x : y`
+// espalhado pelas functions) porque um ternário de 2 ramos silenciosamente
+// joga qualquer 3ª loja nova no ramo "else" errado. Toda function que precisa
+// dessa coluna deve importar daqui, nunca reescrever o mapeamento na mão.
+export const DISCOUNT_ID_COLUMN: Record<StoreKey, `shopify_discount_id_${StoreKey}`> = {
+  basic: "shopify_discount_id_basic",
+  exclusivos: "shopify_discount_id_exclusivos",
+  shadow: "shopify_discount_id_shadow",
+};
+
+/**
+ * Identifica de qual loja veio um webhook, pelo header `x-shopify-shop-domain`
+ * comparado contra o domínio configurado de cada loja. Centralizado aqui (não
+ * dentro de shopify-webhook) porque delete-member e outras functions também
+ * precisam resolver loja a partir de domínio.
+ */
+export function resolveStore(shopDomain: string | null): StoreKey | null {
+  if (!shopDomain) return null;
+  for (const store of STORE_KEYS) {
+    if (shopDomain === Deno.env.get(`SHOPIFY_STORE_DOMAIN_${store.toUpperCase()}`)) return store;
+  }
+  return null;
 }
 
 // App SEPARADO, só com o escopo write_gift_cards -- não reaproveita o app de
@@ -171,11 +198,24 @@ interface CreateDiscountResult {
   };
 }
 
-/** Cria um cupom de afiliado novo, clonando as coleções de referência da loja. */
+/**
+ * Cria um cupom de afiliado novo, clonando as coleções de referência da loja.
+ *
+ * `collectionIds` vazio (nenhum molde encontrado -- acontece na PRIMEIRA vez
+ * que um cupom é criado numa loja nova, sem nenhum afiliado anterior pra
+ * copiar) usa `items: { all: true }` em vez de `collections: { add: [] }` --
+ * a Shopify rejeita uma lista de coleções vazia com "Customer get must have
+ * either item selection or set as all" (visto na prática ao ligar a loja
+ * Shadow, que nasceu sem nenhum molde). "Todas as coleções" também cobre
+ * coleção futura automaticamente, sem depender da automação de
+ * collections/create -- efeito colateral bom, não só um workaround.
+ */
 export async function createAffiliateDiscount(
   config: ShopifyStoreConfig,
   params: { code: string; percentage: number; collectionIds: string[] },
 ): Promise<string> {
+  const items = params.collectionIds.length > 0 ? { collections: { add: params.collectionIds } } : { all: true };
+
   const data = await shopifyGraphQL<CreateDiscountResult>(
     config,
     `mutation($input: DiscountCodeBasicInput!) {
@@ -193,7 +233,7 @@ export async function createAffiliateDiscount(
         appliesOncePerCustomer: false,
         customerGets: {
           value: { percentage: params.percentage },
-          items: { collections: { add: params.collectionIds } },
+          items,
         },
       },
     },

@@ -6,6 +6,9 @@
 //   - orders/cancelled     -> apaga a venda (pedido cancelado)
 //   - refunds/create       -> apaga a venda (pedido estornado, total ou parcial)
 //   - discounts/create     -> cadastra o membro automaticamente (cupom novo)
+//     e replica o MESMO código como desconto nas outras lojas configuradas
+//     que ainda não o têm (write real na Shopify) -- não precisa mais criar
+//     o cupom manualmente loja por loja.
 //   - discount_codes/create -> idem, formato legado da API de price rules
 //   - collections/create   -> adiciona a coleção nova em TODO cupom de
 //     afiliado já sincronizado naquela loja (write real na Shopify, usa
@@ -19,13 +22,15 @@
 // O trigger do banco recalcula o ciclo do mês automaticamente em qualquer
 // insert/delete de `sales`.
 //
-// Atende DUAS lojas Shopify na mesma URL — cada uma com seu próprio signing
-// secret (SHOPIFY_WEBHOOK_SECRET_BASIC e SHOPIFY_WEBHOOK_SECRET_EXCLUSIVOS).
-// A verificação HMAC testa contra os dois, aceita se bater com qualquer um.
+// Atende TRÊS lojas Shopify na mesma URL — cada uma com seu próprio signing
+// secret (SHOPIFY_WEBHOOK_SECRET_BASIC, SHOPIFY_WEBHOOK_SECRET_EXCLUSIVOS e
+// SHOPIFY_WEBHOOK_SECRET_SHADOW). A verificação HMAC testa contra as três,
+// aceita se bater com qualquer uma.
 //
 //   1. Defina os secrets da function:
 //        npx supabase secrets set SHOPIFY_WEBHOOK_SECRET_BASIC=xxxxx
 //        npx supabase secrets set SHOPIFY_WEBHOOK_SECRET_EXCLUSIVOS=xxxxx
+//        npx supabase secrets set SHOPIFY_WEBHOOK_SECRET_SHADOW=xxxxx
 //        npx supabase secrets set SUPABASE_SERVICE_ROLE_KEY=xxxxx   (já vem
 //          disponível automaticamente em produção, mas em alguns setups
 //          precisa ser setada manualmente)
@@ -51,10 +56,13 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import {
   addCollectionsToDiscount,
+  createAffiliateDiscount,
   deleteAffiliateDiscount,
+  DISCOUNT_ID_COLUMN,
   findDiscountIdByCode,
   getDiscountCollectionIds,
   getStoreConfig,
+  resolveStore,
   ShopifyGraphQLError,
   STORE_KEYS,
   type StoreKey,
@@ -62,11 +70,12 @@ import {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-// Duas lojas Shopify, cada uma com o próprio signing secret — testa a
-// assinatura contra os dois (a request só precisa bater com um).
+// Três lojas Shopify, cada uma com o próprio signing secret — testa a
+// assinatura contra todas (a request só precisa bater com uma).
 const SHOPIFY_WEBHOOK_SECRETS = [
   Deno.env.get("SHOPIFY_WEBHOOK_SECRET_BASIC") ?? "",
   Deno.env.get("SHOPIFY_WEBHOOK_SECRET_EXCLUSIVOS") ?? "",
+  Deno.env.get("SHOPIFY_WEBHOOK_SECRET_SHADOW") ?? "",
 ].filter(Boolean);
 
 // Precisa ficar igual a SYNTHETIC_LOGIN_DOMAIN em src/lib/auth.ts — é o
@@ -291,7 +300,7 @@ async function linkAndSyncDiscount(memberId: string, couponCode: string, store: 
   const config = getStoreConfig(store);
   if (!config) return;
 
-  const column = store === "basic" ? "shopify_discount_id_basic" : "shopify_discount_id_exclusivos";
+  const column = DISCOUNT_ID_COLUMN[store];
 
   // O índice de busca da Shopify (usado por findDiscountIdByCode) às vezes
   // ainda não indexou o desconto no exato momento em que o webhook
@@ -342,6 +351,57 @@ async function linkAndSyncDiscount(memberId: string, couponCode: string, store: 
   }
 }
 
+// Depois que um cupom já existe em pelo menos uma loja, tenta CRIAR o mesmo
+// código como desconto em toda outra loja configurada que ainda não o tem --
+// é isso que faz "cria o cupom uma vez" virar "aparece nas 3 lojas
+// automaticamente", sem precisar recriar manualmente em cada uma. Clona a
+// lista de coleções de outro membro já rastreado NAQUELA loja, mesmo
+// raciocínio de linkAndSyncDiscount/shopify-sync-coupon (nunca usa "o
+// desconto mais recente" como molde, só um dos nossos). Best-effort por
+// loja: falha numa (credencial não configurada, erro da API) não impede a
+// tentativa nas demais nem derruba o resto do webhook.
+async function syncToSiblingStores(memberId: string, couponCode: string): Promise<void> {
+  const { data: appConfig } = await supabase.from("app_config").select("commission_rate").eq("id", 1).maybeSingle();
+  const percentage = appConfig?.commission_rate ?? 0.05;
+
+  const { data: member } = await supabase
+    .from("members")
+    .select("shopify_discount_id_basic, shopify_discount_id_exclusivos, shopify_discount_id_shadow")
+    .eq("id", memberId)
+    .maybeSingle();
+  if (!member) return;
+
+  for (const store of STORE_KEYS) {
+    const column = DISCOUNT_ID_COLUMN[store];
+    if ((member as Record<string, unknown>)[column]) continue; // já tem cupom nessa loja
+
+    const config = getStoreConfig(store);
+    if (!config) continue; // loja sem credencial configurada -- nada a fazer
+
+    try {
+      const { data: referenceCandidates } = await supabase
+        .from("members")
+        .select(column)
+        .not(column, "is", null)
+        .neq("id", memberId)
+        .order("created_at", { ascending: true })
+        .limit(5);
+
+      let collectionIds: string[] = [];
+      for (const candidate of (referenceCandidates ?? []) as Record<string, unknown>[]) {
+        const candidateId = candidate[column] as string;
+        collectionIds = await getDiscountCollectionIds(config, candidateId);
+        if (collectionIds.length > 0) break;
+      }
+
+      const discountId = await createAffiliateDiscount(config, { code: couponCode, percentage, collectionIds });
+      await supabase.from("members").update({ [column]: discountId }).eq("id", memberId);
+    } catch (err) {
+      console.error(`Não deu pra criar o cupom ${couponCode} automaticamente na loja ${store}:`, err);
+    }
+  }
+}
+
 // Cupom novo criado na Shopify -> cadastra o membro automaticamente. O nome
 // sai igual ao código do cupom (a Shopify não sabe o nome de verdade do
 // afiliado) — o admin corrige depois pelo ícone de lápis na tabela. Já cria
@@ -363,7 +423,7 @@ async function handleDiscountCreated(payload: Record<string, unknown>, shopDomai
 
   const { data: existing, error: existingError } = await supabase
     .from("members")
-    .select("id, shopify_discount_id_basic, shopify_discount_id_exclusivos")
+    .select("id, shopify_discount_id_basic, shopify_discount_id_exclusivos, shopify_discount_id_shadow")
     .ilike("coupon_code", couponCode)
     .maybeSingle();
 
@@ -378,8 +438,7 @@ async function handleDiscountCreated(payload: Record<string, unknown>, shopDomai
     // discount_id DESSA loja salvo, vincula e sincroniza agora. Sem isso,
     // um cupom recriado com o mesmo código numa segunda loja ficava pra
     // sempre invisível pra automação nessa loja.
-    const column = store === "basic" ? "shopify_discount_id_basic" : "shopify_discount_id_exclusivos";
-    const alreadyLinked = store ? Boolean((existing as Record<string, unknown>)[column]) : true;
+    const alreadyLinked = store ? Boolean((existing as Record<string, unknown>)[DISCOUNT_ID_COLUMN[store]]) : true;
 
     if (store && !alreadyLinked) {
       try {
@@ -387,10 +446,17 @@ async function handleDiscountCreated(payload: Record<string, unknown>, shopDomai
       } catch (err) {
         console.error(`Não achou/sincronizou o discount_id do cupom ${couponCode} (${store}):`, err);
       }
-      return jsonResponse({ ok: true, member_id: existing.id, coupon_code: couponCode, linked_store: store });
     }
 
-    return jsonResponse({ skipped: true, reason: `Já existe membro pro cupom '${couponCode}'` });
+    // Garante as demais lojas mesmo quando a de origem já estava linkada
+    // (ex: webhook duplicado) -- idempotente, só cria onde ainda falta.
+    try {
+      await syncToSiblingStores(existing.id, couponCode);
+    } catch (err) {
+      console.error(`Erro ao sincronizar cupom ${couponCode} nas demais lojas:`, err);
+    }
+
+    return jsonResponse({ ok: true, member_id: existing.id, coupon_code: couponCode, linked_store: store ?? undefined });
   }
 
   const email = `${couponCode.toLowerCase()}@${SYNTHETIC_LOGIN_DOMAIN}`;
@@ -437,6 +503,12 @@ async function handleDiscountCreated(payload: Record<string, unknown>, shopDomai
     }
   }
 
+  try {
+    await syncToSiblingStores(member.id, couponCode);
+  } catch (err) {
+    console.error(`Erro ao sincronizar cupom ${couponCode} nas demais lojas:`, err);
+  }
+
   return jsonResponse({ ok: true, member_id: member.id, coupon_code: couponCode, login_created: !linkError });
 }
 
@@ -447,16 +519,6 @@ interface ShopifyCollectionPayload {
 
 function collectionGid(payload: ShopifyCollectionPayload): string {
   return payload.admin_graphql_api_id || `gid://shopify/Collection/${payload.id}`;
-}
-
-// A mesma URL de webhook atende as duas lojas -- o header x-shopify-shop-domain
-// diz de qual loja veio o evento, pra saber que loja usar na chamada de volta
-// (write) e qual coluna de member.shopify_discount_id_* olhar.
-function resolveStore(shopDomain: string | null): StoreKey | null {
-  if (!shopDomain) return null;
-  if (shopDomain === Deno.env.get("SHOPIFY_STORE_DOMAIN_BASIC")) return "basic";
-  if (shopDomain === Deno.env.get("SHOPIFY_STORE_DOMAIN_EXCLUSIVOS")) return "exclusivos";
-  return null;
 }
 
 // Coleção nova criada na Shopify -> adiciona ela na lista de coleções
@@ -476,7 +538,7 @@ async function handleCollectionCreated(payload: ShopifyCollectionPayload, shopDo
     return jsonResponse({ error: `Credenciais da Shopify não configuradas pra ${store}` }, 500);
   }
 
-  const column = store === "basic" ? "shopify_discount_id_basic" : "shopify_discount_id_exclusivos";
+  const column = DISCOUNT_ID_COLUMN[store];
   const { data: members, error } = await supabase.from("members").select(`id, coupon_code, ${column}`).not(column, "is", null);
 
   if (error) {
@@ -515,9 +577,9 @@ interface ShopifyDiscountDeletedPayload {
 // completo (login + histórico de vendas/comissão), igual o botão "Excluir"
 // manual do painel -- irreversível, sem confirmação (evento automático não
 // tem como pedir pra digitar o cupom). Casa o discount_id do payload contra
-// members.shopify_discount_id_<loja>; se o membro tiver cupom nas DUAS
-// lojas, apaga o desconto da outra loja também antes de apagar o membro
-// (mesmo comportamento do delete-member).
+// members.shopify_discount_id_<loja>; se o membro tiver cupom em mais de uma
+// loja, apaga o desconto das outras também antes de apagar o membro (mesmo
+// comportamento do delete-member).
 async function handleDiscountDeleted(payload: ShopifyDiscountDeletedPayload, shopDomain: string | null): Promise<Response> {
   const discountId = payload.admin_graphql_api_id || (payload.id ? `gid://shopify/DiscountCodeNode/${payload.id}` : null);
   if (!discountId) {
@@ -529,11 +591,13 @@ async function handleDiscountDeleted(payload: ShopifyDiscountDeletedPayload, sho
     return jsonResponse({ skipped: true, reason: `Loja não reconhecida pelo domínio '${shopDomain}'` });
   }
 
-  const column = store === "basic" ? "shopify_discount_id_basic" : "shopify_discount_id_exclusivos";
+  const column = DISCOUNT_ID_COLUMN[store];
 
   const { data: member, error } = await supabase
     .from("members")
-    .select("id, coupon_code, name, auth_user_id, is_admin, shopify_discount_id_basic, shopify_discount_id_exclusivos")
+    .select(
+      "id, coupon_code, name, auth_user_id, is_admin, shopify_discount_id_basic, shopify_discount_id_exclusivos, shopify_discount_id_shadow",
+    )
     .eq(column, discountId)
     .maybeSingle();
 
@@ -548,12 +612,8 @@ async function handleDiscountDeleted(payload: ShopifyDiscountDeletedPayload, sho
     return jsonResponse({ skipped: true, reason: "Não apaga conta de admin automaticamente" });
   }
 
-  const discountIdByStore: Record<StoreKey, string | null> = {
-    basic: member.shopify_discount_id_basic,
-    exclusivos: member.shopify_discount_id_exclusivos,
-  };
   for (const s of STORE_KEYS) {
-    const id = discountIdByStore[s];
+    const id = (member as Record<string, unknown>)[DISCOUNT_ID_COLUMN[s]] as string | null;
     if (!id || id === discountId) continue; // o desta loja já foi apagado na Shopify, não precisa chamar de novo
     const config = getStoreConfig(s);
     if (!config) continue;

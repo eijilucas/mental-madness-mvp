@@ -18,7 +18,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
-import { deleteAffiliateDiscount, getStoreConfig, ShopifyGraphQLError, STORE_KEYS, type StoreKey } from "../_shared/shopify.ts";
+import { DISCOUNT_ID_COLUMN, deleteAffiliateDiscount, getStoreConfig, ShopifyGraphQLError, STORE_KEYS } from "../_shared/shopify.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -73,7 +73,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: targetMember, error: targetError } = await adminClient
     .from("members")
-    .select("id, coupon_code, name, auth_user_id, is_admin, shopify_discount_id_basic, shopify_discount_id_exclusivos")
+    .select("id, coupon_code, name, auth_user_id, is_admin, shopify_discount_id_basic, shopify_discount_id_exclusivos, shopify_discount_id_shadow")
     .eq("id", body.member_id)
     .maybeSingle();
 
@@ -85,13 +85,9 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Não dá pra excluir uma conta de admin por aqui" }, 400);
   }
 
-  const discountIdByStore: Record<StoreKey, string | null> = {
-    basic: targetMember.shopify_discount_id_basic,
-    exclusivos: targetMember.shopify_discount_id_exclusivos,
-  };
   const shopifyDeleteFailures: string[] = [];
   for (const store of STORE_KEYS) {
-    const discountId = discountIdByStore[store];
+    const discountId = targetMember[DISCOUNT_ID_COLUMN[store]] as string | null;
     if (!discountId) continue;
     const config = getStoreConfig(store);
     if (!config) continue;
