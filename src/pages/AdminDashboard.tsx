@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { currentCycleMonth, formatCycleMonthLabel, nextCycleMonth } from "../lib/date";
+import { SYNTHETIC_LOGIN_DOMAIN } from "../lib/auth";
 import { extractFunctionErrorMessage, invokeAdminFunction } from "../lib/functions";
 import { Header } from "../components/Header";
 import { StatCard } from "../components/StatCard";
@@ -97,6 +98,93 @@ export function AdminDashboard() {
   const nextMonth = nextCycleMonth(selectedMonth);
 
   const [reloadTick, setReloadTick] = useState(0);
+  const [newMemberName, setNewMemberName] = useState("");
+  const [newMemberCoupon, setNewMemberCoupon] = useState("");
+  const [addingMember, setAddingMember] = useState(false);
+  const [addMemberError, setAddMemberError] = useState<string | null>(null);
+
+  const [addMemberResult, setAddMemberResult] = useState<{ coupon: string; password: string } | null>(null);
+  const [newMemberStoreBasic, setNewMemberStoreBasic] = useState(false);
+  const [newMemberStoreExclusivos, setNewMemberStoreExclusivos] = useState(false);
+  const [newMemberStoreShadow, setNewMemberStoreShadow] = useState(false);
+
+  async function handleAddMember() {
+    setAddMemberError(null);
+    setAddMemberResult(null);
+
+    const name = newMemberName.trim();
+    const coupon = newMemberCoupon.trim().toUpperCase();
+
+    if (!name || !coupon) {
+      setAddMemberError("Preenche nome e cupom.");
+      return;
+    }
+
+    setAddingMember(true);
+    const { data: created, error } = await supabase
+      .from("members")
+      .insert({ name, coupon_code: coupon, email: `${coupon.toLowerCase()}@${SYNTHETIC_LOGIN_DOMAIN}` })
+      .select("id")
+      .single();
+
+    if (error) {
+      setAddingMember(false);
+      setAddMemberError(error.code === "23505" ? `Já existe um membro com o cupom "${coupon}".` : "Não deu pra cadastrar. Tenta de novo.");
+      return;
+    }
+
+    // Já cria o login na hora, sem precisar rodar script pelo terminal.
+    const { data: loginData, error: loginError } = await invokeAdminFunction("create-member-login", {
+      member_id: created.id,
+    });
+
+    // E já cria o cupom nas lojas Shopify marcadas, se alguma foi marcada.
+    // Marcar só uma já basta pras outras 2 -- criar o desconto na Shopify
+    // dispara o webhook discounts/create de volta pra gente, que agora
+    // propaga sozinho pras lojas que ainda não têm (ver shopify-webhook /
+    // syncToSiblingStores). As 3 caixas continuam aqui só pra quem quiser
+    // já sair com tudo criado na hora, sem esperar o webhook.
+    const stores: ("basic" | "exclusivos" | "shadow")[] = [
+      ...(newMemberStoreBasic ? (["basic"] as const) : []),
+      ...(newMemberStoreExclusivos ? (["exclusivos"] as const) : []),
+      ...(newMemberStoreShadow ? (["shadow"] as const) : []),
+    ];
+    let shopifyWarning: string | null = null;
+    if (stores.length > 0) {
+      const { data: shopifyData, error: shopifyError } = await invokeAdminFunction("shopify-sync-coupon", {
+        member_id: created.id,
+        action: "create",
+        stores,
+      });
+      if (shopifyError || shopifyData?.error) {
+        shopifyWarning = (await extractFunctionErrorMessage(shopifyError, shopifyData)) ?? "Não deu pra criar o cupom na Shopify.";
+      } else {
+        const failed = (shopifyData?.results ?? []).filter((r: { ok: boolean }) => !r.ok);
+        if (failed.length > 0) {
+          shopifyWarning = `Cupom não criado em: ${failed.map((r: { store: string; reason?: string }) => `${r.store}${r.reason ? ` (${r.reason})` : ""}`).join(", ")}.`;
+        }
+      }
+    }
+
+    setAddingMember(false);
+    setNewMemberName("");
+    setNewMemberCoupon("");
+    setNewMemberStoreBasic(false);
+    setNewMemberStoreExclusivos(false);
+    setNewMemberStoreShadow(false);
+    setReloadTick((t) => t + 1);
+
+    if (loginError || loginData?.error) {
+      const reason = await extractFunctionErrorMessage(loginError, loginData);
+      setAddMemberError(
+        `Membro cadastrado, mas não deu pra criar o login automaticamente${reason ? `: ${reason}` : ""}. Tenta "Criar login" na tabela.`,
+      );
+      return;
+    }
+
+    if (shopifyWarning) setAddMemberError(shopifyWarning);
+    setAddMemberResult({ coupon: loginData.coupon_code, password: loginData.temp_password });
+  }
 
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -751,6 +839,84 @@ export function AdminDashboard() {
           </Link>
         }
       />
+
+      <section className="mm-table-section" style={{ marginBottom: 24 }}>
+        <h2 className="mm-section-title">Adicionar Membro</h2>
+
+        {addMemberResult && (
+          <div className="mm-reset-banner">
+            Membro <strong>{addMemberResult.coupon}</strong> criado com login. Senha temporária:{" "}
+            <strong>{addMemberResult.password}</strong> (vai pedir pra trocar no primeiro login).
+            <button type="button" className="mm-link-btn" onClick={() => setAddMemberResult(null)}>
+              Fechar
+            </button>
+          </div>
+        )}
+        {addMemberError && (
+          <div className="mm-reset-banner mm-reset-banner-error">
+            {addMemberError}
+            <button type="button" className="mm-link-btn" onClick={() => setAddMemberError(null)}>
+              Fechar
+            </button>
+          </div>
+        )}
+
+        <div className="mm-config-grid">
+          <div className="mm-field">
+            <label className="mm-label" htmlFor="new-member-name">
+              Nome
+            </label>
+            <input
+              id="new-member-name"
+              type="text"
+              value={newMemberName}
+              onChange={(e) => setNewMemberName(e.target.value)}
+            />
+          </div>
+
+          <div className="mm-field">
+            <label className="mm-label" htmlFor="new-member-coupon">
+              Cupom
+            </label>
+            <input
+              id="new-member-coupon"
+              type="text"
+              value={newMemberCoupon}
+              onChange={(e) => setNewMemberCoupon(e.target.value)}
+            />
+          </div>
+
+          <div className="mm-field">
+            <label className="mm-label">Criar cupom na Shopify</label>
+            <div style={{ display: "flex", gap: 16, height: 42, alignItems: "center" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input type="checkbox" checked={newMemberStoreBasic} onChange={(e) => setNewMemberStoreBasic(e.target.checked)} />
+                Basic
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={newMemberStoreExclusivos}
+                  onChange={(e) => setNewMemberStoreExclusivos(e.target.checked)}
+                />
+                Exclusivos
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={newMemberStoreShadow}
+                  onChange={(e) => setNewMemberStoreShadow(e.target.checked)}
+                />
+                Shadow
+              </label>
+            </div>
+          </div>
+
+          <button type="button" className="mm-config-save-btn" disabled={addingMember} onClick={handleAddMember}>
+            {addingMember ? "Adicionando..." : "Adicionar"}
+          </button>
+        </div>
+      </section>
 
       <section className="mm-table-section" style={{ marginBottom: 24 }}>
         <h2 className="mm-section-title">Configurações</h2>
