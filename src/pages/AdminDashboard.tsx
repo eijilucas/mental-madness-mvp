@@ -1213,9 +1213,9 @@ export function AdminDashboard() {
             />
           </div>
 
-          <div className="mm-field">
+          <div className="mm-field" style={{ width: "auto" }}>
             <label className="mm-label">Criar cupom na Shopify</label>
-            <div style={{ display: "flex", gap: 16, height: 42, alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 16, minHeight: 42, alignItems: "center", flexWrap: "wrap" }}>
               <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
                 <input type="checkbox" checked={newMemberStoreBasic} onChange={(e) => setNewMemberStoreBasic(e.target.checked)} />
                 Basic
